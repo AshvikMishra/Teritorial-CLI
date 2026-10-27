@@ -26,7 +26,7 @@ use crate::command::{self, help, Action, Analysis, CommandContext, History, Subm
 use crate::log::{self, EventLog, Msg, Tone};
 use crate::prompt::Prompt;
 use crate::settings::{Persistence, Settings, StartMode, UiOptions};
-use crate::setup::{FormChange, SetupForm};
+use crate::setup::{Field, FormChange, SetupForm};
 use crate::term::{InputThread, TerminalGuard};
 use crate::view;
 
@@ -841,13 +841,29 @@ impl App {
     }
 
     fn key_setup(&mut self, key: KeyEvent) {
+        if let Some(overlay) = self.help.as_mut() {
+            match key.code {
+                KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => self.help = None,
+                KeyCode::Up => overlay.scroll = overlay.scroll.saturating_sub(1),
+                KeyCode::Down => overlay.scroll = (overlay.scroll + 1).min(overlay.lines.len().saturating_sub(1)),
+                KeyCode::PageUp => overlay.scroll = overlay.scroll.saturating_sub(8),
+                KeyCode::PageDown => overlay.scroll = (overlay.scroll + 8).min(overlay.lines.len().saturating_sub(1)),
+                KeyCode::Home => overlay.scroll = 0,
+                _ => {}
+            }
+            return;
+        }
         match key.code {
             KeyCode::Up | KeyCode::BackTab => self.form.up(),
             KeyCode::Down | KeyCode::Tab => self.form.down(),
             KeyCode::Left => self.form_change(-1),
             KeyCode::Right | KeyCode::Char(' ') => self.form_change(1),
             KeyCode::Backspace => self.form.backspace(),
-            KeyCode::Enter => self.setup_start(),
+            KeyCode::Enter => match self.form.field() {
+                Field::Play => self.setup_start(),
+                Field::HowToPlay => self.open_setup_help(),
+                _ => self.form_change(1),
+            },
             KeyCode::Esc => self.quit = true,
             KeyCode::Char(c) => {
                 if let Some(d) = c.to_digit(10) {
@@ -860,12 +876,18 @@ impl App {
                     }
                 } else if c == 'q' || c == 'Q' {
                     self.quit = true;
+                } else if c == 'h' || c == 'H' {
+                    self.open_setup_help();
                 } else if c == 'l' || c == 'L' {
                     self.load_latest();
                 }
             }
             _ => {}
         }
+    }
+
+    fn open_setup_help(&mut self) {
+        self.help = Some(HelpOverlay { lines: help::before_play(), scroll: 0 });
     }
 
     fn form_change(&mut self, dir: i32) {
@@ -1466,5 +1488,96 @@ impl App {
             rank,
             board.len()
         )
+    }
+}
+
+#[cfg(test)]
+mod setup_tests {
+    use super::*;
+
+    struct MemoryPersistence;
+    impl Persistence for MemoryPersistence {
+        fn save_game(&mut self, _: &str, _: &Game) -> Result<String, String> { Ok(String::new()) }
+        fn list_saves(&self) -> Vec<String> { Vec::new() }
+        fn load_game(&mut self, _: &str) -> Result<Game, String> { Err("No saves".into()) }
+        fn save_replay(&mut self, _: &Replay) -> Result<String, String> { Ok(String::new()) }
+        fn save_settings(&mut self, _: &Settings) -> Result<(), String> { Ok(()) }
+    }
+
+    fn setup() -> App {
+        let mut app = App::new(UiOptions {
+            settings: Settings::default(),
+            start: StartMode::Setup(MatchConfig::default()),
+            caps: Capabilities::default(),
+            map: WorldMap::builtin(),
+            balance: Balance::default(),
+            skip_splash: true,
+        }, Box::new(MemoryPersistence));
+        app.after_splash();
+        app
+    }
+
+    fn select(app: &mut App, field: Field) {
+        app.form.selected = Field::ALL.iter().position(|&f| f == field).unwrap();
+    }
+
+    fn press(app: &mut App, code: KeyCode) {
+        app.handle_key(KeyEvent::new(code, KeyModifiers::NONE));
+    }
+
+    #[test]
+    fn enter_changes_options_and_only_play_starts_a_match() {
+        let mut app = setup();
+        select(&mut app, Field::Alliances);
+        let before = app.form.alliances;
+        press(&mut app, KeyCode::Enter);
+        assert_ne!(app.form.alliances, before);
+        assert_eq!(app.screen, Screen::Setup);
+        assert!(app.session.is_none());
+        press(&mut app, KeyCode::Char(' '));
+        assert_eq!(app.form.alliances, before);
+        press(&mut app, KeyCode::Right);
+        assert_ne!(app.form.alliances, before);
+        press(&mut app, KeyCode::Left);
+        assert_eq!(app.form.alliances, before);
+        select(&mut app, Field::Play);
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.screen, Screen::Countdown);
+        assert!(app.session.is_some());
+    }
+
+    #[test]
+    fn setup_help_preserves_settings_and_never_starts_a_match() {
+        let mut app = setup();
+        select(&mut app, Field::HowToPlay);
+        let config = app.form.clone().build().1;
+        press(&mut app, KeyCode::Enter);
+        assert!(app.help.is_some());
+        press(&mut app, KeyCode::PageDown);
+        assert!(app.help.as_ref().unwrap().scroll > 0);
+        press(&mut app, KeyCode::Enter);
+        assert!(app.help.is_none());
+        assert_eq!(app.form.field(), Field::HowToPlay);
+        assert_eq!(app.form.clone().build().1, config);
+        assert_eq!(app.screen, Screen::Setup);
+        assert!(app.session.is_none());
+        press(&mut app, KeyCode::Char('h'));
+        assert!(app.help.is_some());
+        press(&mut app, KeyCode::Esc);
+        assert!(app.help.is_none());
+        assert!(!app.quit);
+        press(&mut app, KeyCode::Down);
+        assert_eq!(app.form.field(), Field::Play);
+    }
+
+    #[test]
+    fn setup_buttons_fit_the_minimum_terminal_size() {
+        let mut app = setup();
+        let backend = ratatui::backend::TestBackend::new(60, 20);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal.draw(|frame| view::draw(&mut app, frame)).unwrap();
+        let text: String = terminal.backend().buffer().content.iter().map(|cell| cell.symbol()).collect();
+        assert!(text.contains("[ PLAY ]"));
+        assert!(text.contains("[ HOW TO PLAY ]"));
     }
 }

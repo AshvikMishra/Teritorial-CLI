@@ -134,7 +134,10 @@ pub fn draw(app: &mut App, f: &mut Frame) {
     let now = Instant::now();
     match app.screen {
         Screen::Splash => draw_splash(app, f, area, &pal, now),
-        Screen::Setup => draw_setup(app, f, area, &pal),
+        Screen::Setup => {
+            draw_setup(app, f, area, &pal);
+            draw_help(app, f, area, &pal);
+        },
         Screen::ChooseStart => draw_choose(app, f, area, &pal),
         Screen::Countdown => {
             draw_playing(app, f, area, &pal, now);
@@ -314,6 +317,17 @@ fn draw_setup(app: &App, f: &mut Frame, area: Rect, pal: &Pal) {
             continue;
         }
         let selected = i == form.selected;
+        if matches!(field, Field::HowToPlay | Field::Play) {
+            let style = if selected {
+                Style::new().fg(pal.highlight).add_modifier(Modifier::BOLD | Modifier::REVERSED)
+            } else {
+                pal.fg(pal.accent).add_modifier(Modifier::BOLD)
+            };
+            lines.push(Line::from(Span::styled(
+                format!("{}[ {} ]", if selected { "> " } else { "  " }, field.label()), style,
+            )));
+            continue;
+        }
         let value = form.value_text(*field);
         let mut spans: Vec<Span<'static>> = Vec::new();
         let marker = if selected { "> " } else { "  " };
@@ -361,7 +375,9 @@ fn draw_setup(app: &App, f: &mut Frame, area: Rect, pal: &Pal) {
         Span::styled("Left/Right", pal.fg(pal.accent)),
         Span::styled(" change  ", pal.fg(pal.dim)),
         Span::styled("Enter", pal.fg(pal.accent)),
-        Span::styled(" start  ", pal.fg(pal.dim)),
+        Span::styled(" select/change  ", pal.fg(pal.dim)),
+        Span::styled("h", pal.fg(pal.accent)),
+        Span::styled(" how to play  ", pal.fg(pal.dim)),
         Span::styled("l", pal.fg(pal.accent)),
         Span::styled(" load latest save  ", pal.fg(pal.dim)),
         Span::styled("Esc/q", pal.fg(pal.accent)),

@@ -20,11 +20,13 @@ pub enum Field {
     Seed,
     Theme,
     Renderer,
+    HowToPlay,
+    Play,
 }
 
 impl Field {
     /// Every field in display order.
-    pub const ALL: [Field; 11] = [
+    pub const ALL: [Field; 13] = [
         Field::Preset,
         Field::Minutes,
         Field::Bots,
@@ -36,6 +38,8 @@ impl Field {
         Field::Seed,
         Field::Theme,
         Field::Renderer,
+        Field::HowToPlay,
+        Field::Play,
     ];
 
     /// Row label.
@@ -52,6 +56,8 @@ impl Field {
             Field::Seed => "Seed",
             Field::Theme => "Theme",
             Field::Renderer => "Renderer",
+            Field::HowToPlay => "HOW TO PLAY",
+            Field::Play => "PLAY",
         }
     }
 
@@ -69,6 +75,8 @@ impl Field {
             Field::Seed => "Random, or type digits for a fixed, repeatable seed",
             Field::Theme => "Color theme (saved in your settings)",
             Field::Renderer => "Map renderer (saved in your settings)",
+            Field::HowToPlay => "Press Enter to learn the rules, commands and controls before playing",
+            Field::Play => "Press Enter to start with these settings",
         }
     }
 }
@@ -250,6 +258,7 @@ impl SetupForm {
                 self.renderer = all[cycle(idx, all.len(), dir)];
                 return FormChange::Renderer;
             }
+            Field::HowToPlay | Field::Play => {}
         }
         FormChange::None
     }
@@ -350,6 +359,7 @@ impl SetupForm {
             }
             Field::Theme => self.theme.label().to_string(),
             Field::Renderer => self.renderer.name().to_string(),
+            Field::HowToPlay | Field::Play => "Press Enter".to_string(),
         }
     }
 

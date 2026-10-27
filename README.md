@@ -174,7 +174,11 @@ Windows, which reports AltGr as Ctrl+Alt) go into the prompt as usual.
 On the setup screen:
 
 - Up and Down (or Tab) select a field. Left, Right and Space change it, and digits type numbers.
-- Enter starts the match, `l` loads the newest save, and Esc or `q` quits.
+- Enter changes the selected setting, just like Right or Space.
+- Select **PLAY** with Up/Down or Tab and press Enter to start.
+- Select **HOW TO PLAY** and press Enter (or press `h`) for rules, commands and controls.
+  Scroll with Up/Down or PageUp/PageDown; Esc or Enter returns to setup.
+- `l` loads the newest save, and Esc or `q` quits.
 
 On the game-over screen:
 
