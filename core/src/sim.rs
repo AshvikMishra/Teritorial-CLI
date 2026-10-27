@@ -109,8 +109,8 @@ impl Game {
                 last_lost_to: None,
             });
             if bot_driven {
-                let (lo, _) = reaction_range(&balance, difficulty);
-                let first = rng.range_u64(1, lo.max(1));
+                let (lo, hi) = reaction_range(&balance, difficulty);
+                let first = rng.range_u64(lo, hi);
                 brains.push(BotBrain::new(id, personality, difficulty, first));
             }
         }
@@ -929,7 +929,10 @@ impl Game {
                     reason: WinReason::Elimination,
                 });
             }
-            if alive.len() >= 2 && self.all_mutually_allied(&alive) {
+            if self.config.win == WinCondition::Elimination
+                && alive.len() >= 2
+                && self.all_mutually_allied(&alive)
+            {
                 if let Some(top) = self.best_by_score(&alive) {
                     return Some(Outcome::AlliedVictory {
                         players: alive.clone(),
@@ -1076,4 +1079,75 @@ fn choose_starts(
         *slot = Some(*r);
     }
     result
+}
+
+#[cfg(test)]
+mod timer_tests {
+    use super::*;
+
+    #[test]
+    fn only_timed_matches_end_at_the_configured_deadline() {
+        for win in [
+            WinCondition::Domination { pct: 100 },
+            WinCondition::Elimination,
+            WinCondition::Timed,
+        ] {
+            let config = MatchConfig {
+                win,
+                time_limit_secs: Some(1),
+                ..MatchConfig::default()
+            };
+            let mut game = Game::new(WorldMap::builtin(), Balance::default(), config);
+            for tick in [crate::TICKS_PER_SECOND, crate::TICKS_PER_SECOND * 2] {
+                game.tick = tick;
+                if win != WinCondition::Timed {
+                    assert_eq!(game.config().time_limit_ticks(), None);
+                    assert_eq!(game.remaining_secs(), None);
+                    assert_eq!(game.evaluate_outcome(), None);
+                } else {
+                    assert_eq!(game.remaining_secs(), Some(0));
+                    assert!(matches!(
+                        game.evaluate_outcome(),
+                        Some(Outcome::Winner {
+                            reason: WinReason::Timer,
+                            ..
+                        })
+                    ));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn allied_victory_only_applies_to_elimination() {
+        for win in [WinCondition::Domination { pct: 100 }, WinCondition::Elimination, WinCondition::Timed] {
+            let mut game = Game::new(WorldMap::builtin(), Balance::default(), MatchConfig { win, ..MatchConfig::default() });
+            let alive = game.alive_players();
+            for (i, &a) in alive.iter().enumerate() {
+                for &b in &alive[i + 1..] {
+                    game.alliances.insert((a.min(b), a.max(b)));
+                }
+            }
+            if win == WinCondition::Elimination {
+                assert!(matches!(game.evaluate_outcome(), Some(Outcome::AlliedVictory { .. })));
+            } else {
+                assert_eq!(game.evaluate_outcome(), None);
+            }
+        }
+    }
+
+
+    #[test]
+    fn bots_wait_a_full_reaction_interval_before_their_first_move() {
+        for difficulty in [Difficulty::Easy, Difficulty::Normal, Difficulty::Hard] {
+            let balance = Balance::default();
+            let (lo, hi) = reaction_range(&balance, difficulty);
+            let game = Game::new(WorldMap::builtin(), balance, MatchConfig { difficulty, ..MatchConfig::default() });
+            assert!(!game.brains.is_empty());
+            for brain in &game.brains {
+                assert!(brain.next_decision >= lo && brain.next_decision <= hi);
+            }
+        }
+    }
+
 }

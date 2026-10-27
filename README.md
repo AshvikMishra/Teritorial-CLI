@@ -164,7 +164,7 @@ Players are named by name (`bot-3`), unique prefix or number (`3`).
 | Left, Right, Home, End, Backspace, Delete | Edit the line. With an empty prompt, Left and Right pan the map. |
 | Ctrl+U / Ctrl+W / Ctrl+A / Ctrl+E | Clear the line / delete a word / go to the start / go to the end |
 | Shift or Ctrl + arrows | Pan the map |
-| `+` / `-` | Zoom in or out (only when the prompt is empty, because region codes contain `-`) |
+| `+` / `-` | Zoom in or out through seven levels (only when the prompt is empty, because region codes contain `-`) |
 | PageUp / PageDown | Scroll the event log or the help page |
 | Ctrl+C | Quit immediately |
 
@@ -181,6 +181,10 @@ On the game-over screen:
 - Enter starts a new match and `q` quits.
 - `w` keeps watching the bots after you have been eliminated.
 
+Bot decision intervals are 20–32 seconds on Easy, 10–16 seconds on Normal,
+and 4–7 seconds on Hard, measured in game time. The opening move uses the same
+interval. Easy makes more mistakes; Hard still uses more advanced tactics.
+
 ## Match presets
 
 | Preset | Timer | Pool growth | Bots |
@@ -191,10 +195,10 @@ On the game-over screen:
 | custom | any (`--minutes`) | scaled to the length | 12 |
 
 All presets default to domination at 60% with normal bots and alliances on.
+For domination and elimination, preset minutes control growth pacing only; there is no countdown or time limit.
 Custom lengths scale the growth rate so that shorter matches grow faster. The
 curve runs through 250% at 5 min, 200% at 8, 100% at 25, 60% at 75 and 50% at
-120 or more. Domination and elimination matches also end at the timer when
-there is one.
+120 or more. Only Timed matches end at the time limit.
 
 ## Saves, replays and settings
 

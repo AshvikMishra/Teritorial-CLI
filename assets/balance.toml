@@ -97,34 +97,34 @@ truce_ticks = 300
 # ------------------------------------------- Bots: reaction and difficulty ----
 
 # Easy bot reaction interval, minimum (ticks).
-bot_react_easy_min_ticks = 60
+bot_react_easy_min_ticks = 200
 # Easy bot reaction interval, maximum (ticks).
-bot_react_easy_max_ticks = 100
+bot_react_easy_max_ticks = 320
 # Normal bot reaction interval, minimum (ticks).
-bot_react_normal_min_ticks = 30
+bot_react_normal_min_ticks = 100
 # Normal bot reaction interval, maximum (ticks).
-bot_react_normal_max_ticks = 50
+bot_react_normal_max_ticks = 160
 # Hard bot reaction interval, minimum (ticks).
-bot_react_hard_min_ticks = 10
+bot_react_hard_min_ticks = 40
 # Hard bot reaction interval, maximum (ticks).
-bot_react_hard_max_ticks = 20
+bot_react_hard_max_ticks = 70
 # Random utility noise for Easy bots (permille, plus or minus).
-bot_noise_easy_permille = 400
+bot_noise_easy_permille = 600
 # Random utility noise for Normal bots (permille).
-bot_noise_normal_permille = 200
+bot_noise_normal_permille = 350
 # Random utility noise for Hard bots (permille).
-bot_noise_hard_permille = 60
+bot_noise_hard_permille = 180
 
 # -------------------------------------------- Bots: anti-stall and strategy ----
 
 # Ticks without any capture anywhere before bots escalate one stall level.
-bot_stall_ticks = 1200
+bot_stall_ticks = 2400
 # Maximum stall level.
-bot_stall_max_level = 5
+bot_stall_max_level = 3
 # Attack margin reduction per stall level (permille).
 bot_stall_margin_cut_permille = 60
 # Attack percent increase per stall level.
-bot_stall_attack_pct_step = 10
+bot_stall_attack_pct_step = 5
 # Minimum ticks between a bot's diplomacy evaluations.
 bot_diplomacy_interval_ticks = 300
 # A Warlord pivots to a new focus front after this many ticks.
@@ -154,7 +154,7 @@ bot_aggressor_margin_permille = 1150
 # Aggressor: extra troops on top of the requirement (percent).
 bot_aggressor_overkill_pct = 60
 # Aggressor: utility weight of enemy-owned targets (percent).
-bot_aggressor_enemy_weight_pct = 160
+bot_aggressor_enemy_weight_pct = 110
 # Aggressor: utility weight of defensive fortifies (percent).
 bot_aggressor_fortify_weight_pct = 40
 # Aggressor: base alliance willingness (permille).
@@ -169,7 +169,7 @@ bot_turtle_margin_permille = 1600
 # Turtle: extra troops on top of the requirement (percent).
 bot_turtle_overkill_pct = 25
 # Turtle: utility weight of enemy-owned targets (percent).
-bot_turtle_enemy_weight_pct = 60
+bot_turtle_enemy_weight_pct = 40
 # Turtle: utility weight of defensive fortifies (percent).
 bot_turtle_fortify_weight_pct = 200
 # Turtle: base alliance willingness (permille).
@@ -184,7 +184,7 @@ bot_opportunist_margin_permille = 1250
 # Opportunist: extra troops on top of the requirement (percent).
 bot_opportunist_overkill_pct = 30
 # Opportunist: utility weight of enemy-owned targets (percent).
-bot_opportunist_enemy_weight_pct = 120
+bot_opportunist_enemy_weight_pct = 85
 # Opportunist: utility weight of defensive fortifies (percent).
 bot_opportunist_fortify_weight_pct = 100
 # Opportunist: base alliance willingness (permille).
@@ -199,7 +199,7 @@ bot_warlord_margin_permille = 1250
 # Warlord: extra troops on top of the requirement (percent).
 bot_warlord_overkill_pct = 50
 # Warlord: utility weight of enemy-owned targets (percent).
-bot_warlord_enemy_weight_pct = 130
+bot_warlord_enemy_weight_pct = 95
 # Warlord: utility weight of defensive fortifies (percent).
 bot_warlord_fortify_weight_pct = 70
 # Warlord: base alliance willingness (permille).

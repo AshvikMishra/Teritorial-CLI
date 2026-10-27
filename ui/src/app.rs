@@ -624,7 +624,7 @@ impl App {
         let summary = match session_game(&self.session) {
             Some(g) => {
                 let c = g.config();
-                let timer = match c.time_limit_secs {
+                let timer = match c.active_time_limit_secs() {
                     Some(s) => log::clock(u64::from(s)),
                     None => "no timer".to_string(),
                 };

@@ -272,7 +272,7 @@ fn draw_countdown(app: &App, f: &mut Frame, area: Rect, pal: &Pal, now: Instant)
 
 fn draw_setup(app: &App, f: &mut Frame, area: Rect, pal: &Pal) {
     let form: &SetupForm = &app.form;
-    let rows_needed: u16 = Field::ALL.len() as u16 + 2;
+    let rows_needed: u16 = Field::ALL.iter().filter(|&&field| form.field_visible(field)).count() as u16 + 2;
     let (banner_w, banner_h) = art::size(art::TITLE_BANNER);
     let show_banner = area.width >= banner_w && area.height >= banner_h + rows_needed + 6;
     let top_h = if show_banner { banner_h } else { 1 };
@@ -310,6 +310,9 @@ fn draw_setup(app: &App, f: &mut Frame, area: Rect, pal: &Pal) {
     let label_w: usize = 16;
     let mut lines: Vec<Line<'static>> = Vec::new();
     for (i, field) in Field::ALL.iter().enumerate() {
+        if !form.field_visible(*field) {
+            continue;
+        }
         let selected = i == form.selected;
         let value = form.value_text(*field);
         let mut spans: Vec<Span<'static>> = Vec::new();
@@ -614,7 +617,7 @@ fn draw_status(
     }
     let elapsed = game.elapsed_secs();
     spans.push(Span::styled(clock(elapsed), value));
-    if let Some(limit) = game.config().time_limit_secs {
+    if let Some(limit) = game.config().active_time_limit_secs() {
         let rem = game.remaining_secs().unwrap_or(0);
         if compact {
             spans.push(Span::styled(format!(" -{}", clock(rem)), label));
