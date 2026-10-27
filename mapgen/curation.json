@@ -1,0 +1,268 @@
+{
+  "_readme": "Hand-tuned data for mapgen.py. Keys are Natural Earth ADM0_A3 codes unless noted. Boxes are [lon_min, lon_max, lat_min, lat_max] tested against raster cell centers (min inclusive, max exclusive). Partition rules are ordered: first match wins, the last rule must be the catch-all [-180, 180, -90, 90]. See mapgen/README.md.",
+
+  "min_cells": 3,
+
+  "drop": [
+    "ATF", "ASM", "ABW", "AIA", "ATC", "ATG", "BHR", "BLM", "BMU", "BRB", "COK", "COM", "CPV", "CUW", "CYM",
+    "DMA", "FLK", "FRO", "FSM", "GRD", "GUM", "HMD", "IOA", "IOT", "KIR", "KNA", "LCA", "MAF",
+    "MDV", "MHL", "MLT", "MNP", "MSR", "MUS", "NFK", "NIU", "NRU", "PCN", "PLW", "PYF", "SGS", "SHN", "SPM",
+    "STP", "SXM", "SYC", "TCA", "TON", "TUV", "VCT", "VGB", "VIR", "WLF", "WSM"
+  ],
+
+  "merge": {
+    "_comment": "source ADM0_A3 -> target ADM0_A3; cells and population join the target before partitioning",
+    "VAT": "ITA",
+    "SMR": "ITA",
+    "MCO": "FRA",
+    "LIE": "CHE",
+    "AND": "ESP",
+    "JEY": "GBR",
+    "GGY": "GBR",
+    "IMN": "GBR",
+    "ALD": "FIN",
+    "HKG": "CHN",
+    "MAC": "CHN",
+    "CYN": "CYP",
+    "KAS": "IND",
+    "SOL": "SOM"
+  },
+
+  "keep_small": ["SGP", "LUX", "BRN", "PSX", "TTO", "QAT", "LBN", "GMB", "CYP", "KWT", "SWZ", "LSO", "DJI", "TLS", "JAM", "PRI", "BHS", "SLB", "VUT", "FJI", "NCL", "MNE", "KOS"],
+
+  "name_overrides": {
+    "USA": "United States",
+    "COD": "DR Congo",
+    "COG": "Congo",
+    "CAF": "Central African Republic",
+    "SDS": "South Sudan",
+    "GNQ": "Equatorial Guinea",
+    "BIH": "Bosnia and Herzegovina",
+    "DOM": "Dominican Republic",
+    "SLB": "Solomon Islands",
+    "SAH": "Western Sahara",
+    "SWZ": "Eswatini",
+    "CIV": "Ivory Coast",
+    "PRK": "North Korea",
+    "KOR": "South Korea",
+    "CZE": "Czechia",
+    "MKD": "North Macedonia",
+    "TLS": "Timor-Leste",
+    "PSX": "Palestine",
+    "BHS": "Bahamas",
+    "NCL": "New Caledonia",
+    "TTO": "Trinidad and Tobago"
+  },
+
+  "code_overrides": {},
+
+  "continent_overrides": {},
+
+  "partitions": {
+    "USA": [
+      {"code": "us-ak", "name": "Alaska", "pop_weight": 0.73,
+       "boxes": [[-180, -129.5, 50, 75], [100, 180, 40, 60]]},
+      {"code": "us-w", "name": "US Pacific West", "pop_weight": 55.8,
+       "boxes": [[-180, -150, 15, 30], [-125, -117, 42, 50], [-125, -114.05, 30, 42]]},
+      {"code": "us-s", "name": "US South Central", "pop_weight": 40.6,
+       "boxes": [[-106.7, -103.05, 25, 32], [-103.05, -91.0, 25, 37], [-94, -88.8, 25, 31]]},
+      {"code": "us-m", "name": "US Mountain West", "pop_weight": 21.9,
+       "boxes": [[-125, -102.0, 25, 50]]},
+      {"code": "us-c", "name": "US Midwest", "pop_weight": 68.3,
+       "boxes": [[-104.1, -88.0, 36.6, 50], [-88.0, -80.5, 38.4, 50]]},
+      {"code": "us-se", "name": "US Southeast", "pop_weight": 77.2,
+       "boxes": [[-92, -74, 24, 38.6]]},
+      {"code": "us-ne", "name": "US Northeast", "pop_weight": 63.7,
+       "boxes": [[-82, -66, 37, 48]]},
+      {"drop": true, "boxes": [[-180, 180, -90, 90]]}
+    ],
+
+    "CAN": [
+      {"code": "ca-n", "name": "Northern Canada", "pop_weight": 0.13,
+       "boxes": [[-141.1, -80, 60, 84], [-80, -71, 62.65, 84], [-71, -50, 61.8, 84]]},
+      {"code": "ca-bc", "name": "British Columbia", "pop_weight": 5.1,
+       "boxes": [[-141.1, -120, 48, 60], [-120, -114.7, 48, 50], [-120, -115.9, 50, 51],
+                 [-120, -117.2, 51, 52], [-120, -118.4, 52, 53], [-120, -119.5, 53, 54]]},
+      {"code": "ca-pr", "name": "Canadian Prairies", "pop_weight": 7.0,
+       "boxes": [[-120, -95.15, 48, 60], [-95.15, -92.5, 52.8, 60], [-92.5, -89, 55.5, 60]]},
+      {"code": "ca-at", "name": "Atlantic Canada", "pop_weight": 2.4,
+       "boxes": [[-67.8, -59, 43, 48.05], [-60, -52, 46, 52], [-64.5, -55, 51.5, 61], [-67, -64.5, 52.7, 55.3]]},
+      {"code": "ca-on", "name": "Ontario", "pop_weight": 14.7,
+       "boxes": [[-95.15, -79.5, 41, 57], [-79.5, -77, 43, 46.6], [-77, -74.3, 43, 45.6]]},
+      {"code": "ca-qc", "name": "Quebec", "pop_weight": 8.5,
+       "boxes": [[-180, 180, -90, 90]]}
+    ],
+
+    "RUS": [
+      {"code": "ru-nw", "name": "Northwest Russia", "continent": "Europe", "pop_weight": 13.9,
+       "boxes": [[19, 23, 54, 56], [44, 70, 70, 84]]},
+      {"code": "ru-e", "name": "Russian Far East", "continent": "Asia", "pop_weight": 1.0,
+       "boxes": [[-180, -160, 60, 75], [134, 180, 40, 84]]},
+      {"code": "ru-y", "name": "Yakutia", "continent": "Asia", "pop_weight": 1.0,
+       "boxes": [[105, 134, 56, 84]]},
+      {"code": "ru-am", "name": "Amur", "continent": "Asia", "pop_weight": 5.3,
+       "boxes": [[112, 134, 40, 56]]},
+      {"code": "ru-sib", "name": "East Siberia", "continent": "Asia", "pop_weight": 7.0,
+       "boxes": [[85, 112, 40, 84]]},
+      {"code": "ru-ws", "name": "West Siberia", "continent": "Asia", "pop_weight": 15.0,
+       "boxes": [[60, 85, 40, 84]]},
+      {"code": "ru-s", "name": "Southern Russia", "continent": "Europe", "pop_weight": 26.0,
+       "boxes": [[30, 50, 40, 51.0]]},
+      {"code": "ru-u", "name": "Volga-Urals", "continent": "Europe", "pop_weight": 35.0,
+       "boxes": [[46.5, 60, 40, 84]]},
+      {"code": "ru-nw", "name": "Northwest Russia",
+       "boxes": [[25, 46.5, 58.5, 84]]},
+      {"code": "ru-c", "name": "Central Russia", "continent": "Europe", "pop_weight": 39.0,
+       "boxes": [[-180, 180, -90, 90]]}
+    ],
+
+    "CHN": [
+      {"code": "cn-xj", "name": "Xinjiang", "pop_weight": 25.0,
+       "boxes": [[73, 90.5, 35.6, 50], [90.5, 94.5, 39, 50], [94.5, 96.5, 41.5, 50]]},
+      {"code": "cn-xz", "name": "Tibet", "pop_weight": 9.6,
+       "boxes": [[73, 97.5, 26, 39.5], [97.5, 102, 28, 38.0]]},
+      {"code": "cn-ne", "name": "Manchuria", "pop_weight": 116.0,
+       "boxes": [[119.8, 135.5, 38.5, 54], [117, 135.5, 42, 54]]},
+      {"code": "cn-nw", "name": "Northwest China", "pop_weight": 88.0,
+       "boxes": [[73, 108, 32.5, 50]]},
+      {"code": "cn-sw", "name": "Southwest China", "pop_weight": 218.0,
+       "boxes": [[73, 110.5, 20, 32.5]]},
+      {"code": "cn-n", "name": "North China", "pop_weight": 344.0,
+       "boxes": [[108, 117, 34, 50], [117, 123, 34, 42]]},
+      {"code": "cn-s", "name": "South China", "pop_weight": 200.0,
+       "boxes": [[100, 125, 15, 27.4]]},
+      {"code": "cn-e", "name": "East China", "pop_weight": 330.0,
+       "boxes": [[-180, 180, -90, 90]]}
+    ],
+
+    "BRA": [
+      {"code": "br-s", "name": "South Brazil", "pop_weight": 30.0,
+       "boxes": [[-58, -48.1, -34, -25.2], [-54.7, -50.0, -25.2, -22.6], [-50, -48.1, -25.2, -24.0]]},
+      {"code": "br-ne", "name": "Northeast Brazil", "pop_weight": 57.0,
+       "boxes": [[-46.5, -30, -15, 0], [-41.8, -30, -18.4, -15], [-48.3, -46.5, -7, -1]]},
+      {"code": "br-n", "name": "North Brazil", "pop_weight": 18.4,
+       "boxes": [[-74, -46.5, -9.8, 6], [-66.9, -60.0, -13.8, -9.8], [-50.8, -45.7, -13.5, -5]]},
+      {"code": "br-se", "name": "Southeast Brazil", "pop_weight": 89.0,
+       "boxes": [[-47.2, -30, -25.5, -14.2], [-53.2, -47.2, -25.5, -19.5]]},
+      {"code": "br-co", "name": "Central Brazil", "pop_weight": 16.3,
+       "boxes": [[-180, 180, -90, 90]]}
+    ],
+
+    "AUS": [
+      {"code": "au-w", "name": "Western Australia", "pop_weight": 2.7,
+       "boxes": [[112, 129, -40, -10]]},
+      {"code": "au-q", "name": "Queensland", "pop_weight": 5.2,
+       "boxes": [[141, 154, -29.0, -9], [138, 141, -26, -9]]},
+      {"code": "au-c", "name": "Central Australia", "pop_weight": 2.05,
+       "boxes": [[129, 141, -38.1, -10]]},
+      {"code": "au-se", "name": "Southeast Australia", "pop_weight": 15.9,
+       "boxes": [[-180, 180, -90, 90]]}
+    ],
+
+    "IND": [
+      {"code": "in-e", "name": "East India", "pop_weight": 270.0,
+       "boxes": [[91.5, 95, 5, 15]]},
+      {"code": "in-ne", "name": "Northeast India", "pop_weight": 45.0,
+       "boxes": [[88.9, 98, 21.9, 30], [88, 88.9, 27, 28.2]]},
+      {"code": "in-n", "name": "North India", "pop_weight": 300.0,
+       "boxes": [[68, 74.5, 30.0, 37.5], [74.5, 81.2, 28.3, 37.5], [77.0, 84.7, 23.8, 28.3], [74.4, 77.1, 27.6, 28.3]]},
+      {"code": "in-e", "name": "East India",
+       "boxes": [[83.3, 88.9, 21.4, 27.6], [81.3, 87.6, 17.8, 21.4]]},
+      {"code": "in-w", "name": "West India", "pop_weight": 199.0,
+       "boxes": [[68, 75.5, 18.5, 30], [75.5, 77.6, 20.0, 28.3]]},
+      {"code": "in-c", "name": "Central India", "pop_weight": 109.0,
+       "boxes": [[68, 98, 17.5, 30]]},
+      {"code": "in-s", "name": "South India", "pop_weight": 298.0,
+       "boxes": [[-180, 180, -90, 90]]}
+    ],
+
+    "IDN": [
+      {"code": "id-k", "name": "Kalimantan", "pop_weight": 16.6,
+       "boxes": [[108, 119.2, -4.3, 7]]},
+      {"code": "id-e", "name": "Eastern Indonesia", "pop_weight": 30.0,
+       "boxes": [[119.2, 142, -12, 6]]},
+      {"code": "id-w", "name": "Western Indonesia", "pop_weight": 224.0,
+       "boxes": [[-180, 180, -90, 90]]}
+    ],
+
+    "FRA": [
+      {"code": "gf", "name": "French Guiana", "continent": "South America", "pop_weight": 0.29,
+       "boxes": [[-55, -51, 1, 6.5]]},
+      {"code": "fr", "name": "France", "pop_weight": 64.8,
+       "boxes": [[-6, 10, 41, 52]]},
+      {"drop": true, "boxes": [[-180, 180, -90, 90]]}
+    ],
+
+    "NLD": [
+      {"code": "nl", "boxes": [[3, 8, 50, 54]]},
+      {"drop": true, "boxes": [[-180, 180, -90, 90]]}
+    ],
+
+    "NOR": [
+      {"code": "no", "boxes": [[-1, 35, 57, 82]]},
+      {"drop": true, "boxes": [[-180, 180, -90, 90]]}
+    ],
+
+    "CHL": [
+      {"code": "cl", "boxes": [[-76, -66, -56, -17]]},
+      {"drop": true, "boxes": [[-180, 180, -90, 90]]}
+    ],
+
+    "ECU": [
+      {"code": "ec", "boxes": [[-82, -75, -6, 2]]},
+      {"drop": true, "boxes": [[-180, 180, -90, 90]]}
+    ],
+
+    "NZL": [
+      {"code": "nz", "boxes": [[165, 179, -48, -34]]},
+      {"drop": true, "boxes": [[-180, 180, -90, 90]]}
+    ],
+
+    "ZAF": [
+      {"code": "za", "boxes": [[15, 34, -35, -22]]},
+      {"drop": true, "boxes": [[-180, 180, -90, 90]]}
+    ],
+
+    "YEM": [
+      {"code": "ye", "boxes": [[41, 56, 12, 19]]},
+      {"drop": true, "boxes": [[-180, 180, -90, 90]]}
+    ]
+  },
+
+  "value": {
+    "area_unit_km2": 1000,
+    "pop_unit": 1000000,
+    "area_coef": 0.1,
+    "pop_coef": 0.9
+  },
+
+  "value_overrides": {
+    "_comment": "region code -> final value (1..30); used to lift major economies above what area and population alone give",
+    "us-ne": 22, "us-w": 22, "us-se": 20, "us-c": 20, "us-s": 18, "us-m": 14, "us-ak": 6,
+    "cn-e": 26, "cn-n": 24, "cn-s": 24, "cn-ne": 15,
+    "jp": 24, "de": 22, "gb": 20, "fr": 20, "it": 16, "kr": 16, "es": 13, "tw": 12,
+    "ca-on": 13, "ca-qc": 9, "ca-bc": 9, "ca-pr": 10,
+    "au-se": 12, "au-w": 8,
+    "nl": 9, "ch": 8, "se": 7, "no": 7, "be": 7, "at": 6, "ie": 6, "dk": 6, "fi": 5, "pl": 9,
+    "sg": 6, "il": 6, "ae": 8, "sa": 14, "qa": 5, "kw": 5, "lu": 2,
+    "ru-c": 13, "ru-nw": 9, "br-se": 15, "mx": 17, "tr": 13, "in-w": 17, "za": 11
+  },
+
+  "remove_edges": [],
+
+  "sea_lanes": [
+    ["fr", "gb"], ["be", "gb"], ["gb", "nl"], ["gb", "no"], ["gb", "is"], ["is", "no"], ["gl", "is"], ["ca-n", "gl"],
+    ["dk", "no"], ["ee", "fi"], ["ee", "se"], ["lv", "se"], ["pl", "se"], ["de", "se"],
+    ["dz", "es"], ["it", "tn"], ["al", "it"], ["hr", "it"], ["gr", "it"], ["gr", "ly"],
+    ["cy", "gr"], ["cy", "tr"], ["cy", "sy"], ["cy", "lb"], ["tr", "ua"],
+    ["sa", "sd"], ["er", "ye"], ["dj", "ye"], ["so", "ye"],
+    ["ae", "qa"], ["ir", "qa"], ["ae", "ir"], ["ir", "om"], ["ir", "kw"], ["az", "tm"], ["az", "kz"],
+    ["mg", "mz"], ["in-s", "lk"],
+    ["jp", "kr"], ["jp", "ru-e"], ["jp", "ru-am"], ["jp", "tw"], ["cn-e", "jp"], ["cn-n", "kr"],
+    ["cn-e", "tw"], ["cn-s", "tw"], ["ph", "tw"], ["my", "ph"], ["id-e", "ph"], ["cn-s", "vn"], ["id-w", "my"],
+    ["au-c", "id-e"], ["au-c", "tl"], ["au-q", "pg"], ["pg", "sb"], ["sb", "vu"], ["nc", "vu"], ["fj", "vu"],
+    ["au-q", "nc"], ["au-se", "nz"], ["fj", "nz"], ["nc", "nz"],
+    ["ru-e", "us-ak"],
+    ["cu", "us-se"], ["cu", "mx"], ["bs", "cu"], ["bs", "us-se"], ["cu", "jm"], ["cu", "ht"], ["do", "pr"], ["pr", "tt"], ["tt", "ve"]
+  ]
+}

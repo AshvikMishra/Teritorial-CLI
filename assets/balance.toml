@@ -1,0 +1,205 @@
+# Territorial CLI balance file.
+#
+# Every tunable gameplay number lives here. These values are identical to
+# `Balance::default()` in core/src/balance.rs. Override with
+# `territorial --balance my_balance.toml`; a file only needs the fields it changes.
+#
+# All values are integers. Units:
+#   troops      whole troops
+#   *_milli     milli-troops (1000 = 1 troop)
+#   *_pct       percent
+#   *_permille  thousandths (1000 = 1.0x)
+#   *_ticks     simulation ticks (10 ticks = 1 second)
+
+# ---------------------------------------------------------------- Start ----
+
+# Troops in each player's pool at the start of the match.
+start_pool = 1200
+# Garrison placed in each player's start region.
+start_garrison = 150
+# Random start regions are at least this many graph hops apart (relaxed if impossible).
+start_min_hops = 3
+# Random starts prefer regions whose value is at most this.
+start_max_value = 12
+
+# ---------------------------------------------------- Troop pool economy ----
+# growth/s = (growth_base + growth_per_value * owned_value + pool * growth_pool_permille / 1000)
+#            * (cap - pool) / cap * growth_scale_pct / 100
+# cap      = pool_cap_base + pool_cap_per_value * owned_value
+
+# Pool cap with no territory.
+pool_cap_base = 3000
+# Extra pool cap per point of owned region value.
+pool_cap_per_value = 500
+# Base pool growth in milli-troops per second.
+growth_base_milli = 6000
+# Extra pool growth per point of owned value, in milli-troops per second.
+growth_per_value_milli = 500
+# Pool interest: permille of the current pool added per second (before the logistic factor).
+growth_pool_permille = 10
+
+# ------------------------------------------------------------ Garrisons ----
+
+# Garrison regeneration cap of an owned region with value 0.
+garrison_cap_base = 50
+# Extra garrison cap per point of region value.
+garrison_cap_per_value = 25
+# Flat garrison regeneration per second while below the cap.
+garrison_regen_flat = 1
+# Extra regeneration per second, as permille of the gap to the cap.
+garrison_regen_permille = 15
+# Garrison above the cap (from fortify or captures) decays by this permille of the excess per second.
+garrison_overcap_decay_permille = 3
+# Neutral region garrison with value 0 (neutrals regenerate back up to their start garrison).
+neutral_garrison_base = 30
+# Extra neutral garrison per point of region value.
+neutral_garrison_per_value = 20
+
+# -------------------------------------------------------------- Defense ----
+
+# Defender multiplier for owned regions (1000 = 1.0x).
+defense_base_permille = 1000
+# Defender multiplier for neutral regions.
+neutral_defense_permille = 1200
+# Added to the multiplier when the region is its owner's capital.
+capital_bonus_permille = 500
+# Added to the multiplier while the region is fortified.
+fortified_bonus_permille = 500
+# How long a fortify command keeps the fortified bonus (ticks).
+fortify_duration_ticks = 300
+# Delay before recalled troops reach the pool (ticks).
+recall_delay_ticks = 30
+
+# ------------------------------------------------------------- Marching ----
+
+# March time per 1000 km of edge length (ticks).
+march_ticks_per_1000km = 60
+# Minimum march time (ticks).
+min_march_ticks = 20
+# Percent attacks are clamped to this percent of the pool.
+max_attack_pct = 100
+
+# ---------------------------------------------------------------- Score ----
+
+# Score = owned value * 100 + (pool + garrisons) / score_troops_per_point.
+score_troops_per_point = 100
+
+# ------------------------------------------------------------ Alliances ----
+
+# Maximum simultaneous allies per player.
+max_allies = 3
+# Ticks before an unanswered alliance proposal expires.
+proposal_ttl_ticks = 300
+# Ticks after a broken alliance during which neither side may attack the other.
+truce_ticks = 300
+
+# ------------------------------------------- Bots: reaction and difficulty ----
+
+# Easy bot reaction interval, minimum (ticks).
+bot_react_easy_min_ticks = 60
+# Easy bot reaction interval, maximum (ticks).
+bot_react_easy_max_ticks = 100
+# Normal bot reaction interval, minimum (ticks).
+bot_react_normal_min_ticks = 30
+# Normal bot reaction interval, maximum (ticks).
+bot_react_normal_max_ticks = 50
+# Hard bot reaction interval, minimum (ticks).
+bot_react_hard_min_ticks = 10
+# Hard bot reaction interval, maximum (ticks).
+bot_react_hard_max_ticks = 20
+# Random utility noise for Easy bots (permille, plus or minus).
+bot_noise_easy_permille = 400
+# Random utility noise for Normal bots (permille).
+bot_noise_normal_permille = 200
+# Random utility noise for Hard bots (permille).
+bot_noise_hard_permille = 60
+
+# -------------------------------------------- Bots: anti-stall and strategy ----
+
+# Ticks without any capture anywhere before bots escalate one stall level.
+bot_stall_ticks = 1200
+# Maximum stall level.
+bot_stall_max_level = 5
+# Attack margin reduction per stall level (permille).
+bot_stall_margin_cut_permille = 60
+# Attack percent increase per stall level.
+bot_stall_attack_pct_step = 10
+# Minimum ticks between a bot's diplomacy evaluations.
+bot_diplomacy_interval_ticks = 300
+# A Warlord pivots to a new focus front after this many ticks.
+bot_warlord_pivot_ticks = 1800
+# Bots recall interior garrisons when their pool is below this percent of its cap.
+bot_recall_below_cap_pct = 40
+# Turtles invest pool into border garrisons when the pool is above this percent of its cap.
+bot_excess_fortify_pct = 70
+# Normal and Hard bots attack with their full attack percent when the pool is above this percent of its cap.
+bot_surplus_pool_pct = 60
+
+# ------------------------------------------- Bots: personality weights ----
+# attack_pct:       max percent of pool per attack (Easy bots send exactly this)
+# reserve_pct:      percent of pool kept back for defense
+# margin_permille:  troops sent vs. estimated defense for Normal and Hard bots
+# overkill_pct:     extra troops on top of the requirement
+# enemy_weight_pct: utility of enemy-owned targets vs. neutral ones (100 = equal)
+# fortify_weight_pct: utility of defensive fortifies
+# alliance_permille: base willingness to propose or accept alliances
+
+# Aggressor: max percent of pool per attack.
+bot_aggressor_attack_pct = 60
+# Aggressor: percent of pool kept in reserve.
+bot_aggressor_reserve_pct = 5
+# Aggressor: troops vs. estimated defense (permille).
+bot_aggressor_margin_permille = 1150
+# Aggressor: extra troops on top of the requirement (percent).
+bot_aggressor_overkill_pct = 60
+# Aggressor: utility weight of enemy-owned targets (percent).
+bot_aggressor_enemy_weight_pct = 160
+# Aggressor: utility weight of defensive fortifies (percent).
+bot_aggressor_fortify_weight_pct = 40
+# Aggressor: base alliance willingness (permille).
+bot_aggressor_alliance_permille = 60
+
+# Turtle: max percent of pool per attack.
+bot_turtle_attack_pct = 25
+# Turtle: percent of pool kept in reserve.
+bot_turtle_reserve_pct = 40
+# Turtle: troops vs. estimated defense (permille).
+bot_turtle_margin_permille = 1600
+# Turtle: extra troops on top of the requirement (percent).
+bot_turtle_overkill_pct = 25
+# Turtle: utility weight of enemy-owned targets (percent).
+bot_turtle_enemy_weight_pct = 60
+# Turtle: utility weight of defensive fortifies (percent).
+bot_turtle_fortify_weight_pct = 200
+# Turtle: base alliance willingness (permille).
+bot_turtle_alliance_permille = 700
+
+# Opportunist: max percent of pool per attack.
+bot_opportunist_attack_pct = 40
+# Opportunist: percent of pool kept in reserve.
+bot_opportunist_reserve_pct = 20
+# Opportunist: troops vs. estimated defense (permille).
+bot_opportunist_margin_permille = 1250
+# Opportunist: extra troops on top of the requirement (percent).
+bot_opportunist_overkill_pct = 30
+# Opportunist: utility weight of enemy-owned targets (percent).
+bot_opportunist_enemy_weight_pct = 120
+# Opportunist: utility weight of defensive fortifies (percent).
+bot_opportunist_fortify_weight_pct = 100
+# Opportunist: base alliance willingness (permille).
+bot_opportunist_alliance_permille = 300
+
+# Warlord: max percent of pool per attack.
+bot_warlord_attack_pct = 50
+# Warlord: percent of pool kept in reserve.
+bot_warlord_reserve_pct = 15
+# Warlord: troops vs. estimated defense (permille).
+bot_warlord_margin_permille = 1250
+# Warlord: extra troops on top of the requirement (percent).
+bot_warlord_overkill_pct = 50
+# Warlord: utility weight of enemy-owned targets (percent).
+bot_warlord_enemy_weight_pct = 130
+# Warlord: utility weight of defensive fortifies (percent).
+bot_warlord_fortify_weight_pct = 70
+# Warlord: base alliance willingness (permille).
+bot_warlord_alliance_permille = 400
