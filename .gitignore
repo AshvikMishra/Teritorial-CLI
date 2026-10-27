@@ -1,0 +1,7 @@
+/target
+**/*.rs.bk
+*.swp
+.DS_Store
+# Natural Earth source downloads used by mapgen (not committed)
+/mapgen/cache/
+__pycache__/

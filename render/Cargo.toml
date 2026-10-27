@@ -1,0 +1,17 @@
+[package]
+name = "territorial-render"
+description = "Map rasterizer, themes and ASCII art for Territorial CLI."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[lib]
+name = "territorial_render"
+path = "src/lib.rs"
+
+[dependencies]
+territorial-core = { workspace = true }
+ratatui = { workspace = true }
+serde = { workspace = true }

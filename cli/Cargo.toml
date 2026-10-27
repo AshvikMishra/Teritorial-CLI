@@ -1,0 +1,21 @@
+[package]
+name = "territorial"
+description = "Territorial CLI: a real-time, terminal-native territory conquest game played by typing commands."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "territorial"
+path = "src/main.rs"
+
+[dependencies]
+territorial-core = { workspace = true }
+territorial-render = { workspace = true }
+territorial-ui = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+clap = { workspace = true }

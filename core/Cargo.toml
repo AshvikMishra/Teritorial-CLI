@@ -1,0 +1,16 @@
+[package]
+name = "territorial-core"
+description = "Deterministic, I/O-free simulation core for Territorial CLI: map graph, rules, bots."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[lib]
+name = "territorial_core"
+path = "src/lib.rs"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
