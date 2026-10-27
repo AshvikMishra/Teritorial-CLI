@@ -47,13 +47,13 @@ the game switches to a compact layout. Below 60x20 it asks you to enlarge the wi
 | `--seed N` | Fixed RNG seed. Without it the seed is random. |
 | `--start <region>` | Start region, as a code (`fr`, `us-w`) or a name (`France`, `south-africa`). Starts the match right away. |
 | `--no-alliances` | Disable alliances |
-| `--theme dark\|high-contrast\|colorblind` | Color theme (`hc` and `cb` also work). Overrides the saved setting. |
-| `--renderer auto\|truecolor\|256\|ascii` | Map renderer. Overrides the saved setting. |
+| `--theme dark\|high-contrast\|colorblind` | Color theme (`hc` and `cb` also work) for this run only. The saved setting is kept unless you pick another theme in the game. |
+| `--renderer auto\|truecolor\|256\|ascii` | Map renderer for this run only. The saved setting is kept unless you pick another renderer in the game. |
 | `--balance <file>` | Balance TOML that overrides the built-in values (see [Balance tuning](#balance-tuning)) |
 | `--load <save>` | Resume a saved match, given as a save name or a path to a `.json` file |
 | `--replay <file>` | Watch a replay (read-only), given as a path or a name in the replays folder |
 | `--quick` | Skip the splash and setup screens and start immediately |
-| `--bot-only-watch` | Watch a match played only by bots in the TUI. Player 0 is also a bot. |
+| `--bot-only-watch` | Watch a match played only by bots in the TUI. Player 0 is also a bot (`Bot-0`). The prompt is read-only: speed, pause, focus, info, status, help, theme and quit work. |
 | `--simulate` | Run a bot-only match headless (no TUI) and print the progress and result |
 | `--max-ticks N` | With `--simulate`, give up after N ticks (10 ticks = 1 s). The default is the timer plus 2 minutes, or 60 minutes when there is no timer. |
 | `--version`, `--help` | Version and help |
@@ -168,6 +168,9 @@ Players are named by name (`bot-3`), unique prefix or number (`3`).
 | PageUp / PageDown | Scroll the event log or the help page |
 | Ctrl+C | Quit immediately |
 
+Characters typed with AltGr (such as `@` on many European keyboard layouts on
+Windows, which reports AltGr as Ctrl+Alt) go into the prompt as usual.
+
 On the setup screen:
 
 - Up and Down (or Tab) select a field. Left, Right and Space change it, and digits type numbers.
@@ -205,9 +208,12 @@ there is one.
 - `save` / `sv` writes a save. Names are reduced to letters, digits, `-` and `_`.
   `sv` with no name writes `quicksave`.
 - Resume a save with `--load quicksave`, `--load epic1` or `--load path/to/file.json`,
-  or press `l` on the setup screen to load the newest one.
-- A replay is saved automatically when a live match ends, including when you
-  quit. It holds the config, balance, seed and your command log. The bots
+  or press `l` on the setup screen to load the newest one. A save is checked
+  against the built-in world map and its balance values when it is loaded; a
+  save that does not fit is rejected with an error instead of being resumed.
+- A replay is saved automatically, once per match, when a live match ends,
+  including when you quit. If you are eliminated, it is saved at that moment,
+  and watching the bots finish afterwards does not write a second file. It holds the config, balance, seed and your command log. The bots
   regenerate their moves deterministically. Watch it with `--replay <file>`.
 - Settings hold the theme, renderer, default attack percents, aliases, history
   size, hints and the last match configuration. If the settings file is

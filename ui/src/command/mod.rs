@@ -11,7 +11,8 @@
 //!    `unally|ua` (game verbs, validated with `Game::preview`), and `info|i`,
 //!    `focus|w`, `status|s`, `speed|sp`, `pause|p`, `alias`, `unalias`,
 //!    `help|h`, `save|sv`, `quit|q`, `theme` (UI verbs). Region and player
-//!    names go through [`fuzzy`].
+//!    names go through [`fuzzy`]. In a chain, attack and fortify segments are
+//!    checked against the pool left after the earlier segments.
 //! 4. [`complete`] computes ghost text for the token being typed.
 //!
 //! The app calls [`analyze`] on every edit (hint strip + ghost text) and
@@ -186,7 +187,8 @@ pub struct SubmitResult {
     pub echoes: Vec<String>,
     /// Why the line was rejected. When non-empty, keep the line in the prompt.
     pub errors: Vec<String>,
-    /// On success: the line with `!!` expanded. Push it to [`History`] and use
+    /// On success: the line with `!!` expanded (segments that reached `!!`
+    /// through an alias are stored fully expanded). Push it to [`History`] and use
     /// it as the next `last_line`. `None` on errors or for a blank line.
     pub history_line: Option<String>,
 }
@@ -198,15 +200,40 @@ impl SubmitResult {
     }
 }
 
-fn parse_expanded(seg: &alias::ExpandedSegment, ctx: &CommandContext<'_>) -> Segment {
-    let result = match &seg.error {
-        Some(e) => Err(e.clone()),
-        None => parser::parse_segment(&seg.text, ctx),
+/// Parses one expanded segment of a chain whose earlier segments take
+/// `pool_spent` troops from the pool. Returns the segment and the pool troops
+/// it takes itself (0 when it fails).
+fn parse_expanded(
+    seg: &alias::ExpandedSegment,
+    ctx: &CommandContext<'_>,
+    pool_spent: i64,
+) -> (Segment, i64) {
+    let (result, spend) = match &seg.error {
+        Some(e) => (Err(e.clone()), 0),
+        None => match parser::parse_chained_segment(&seg.text, ctx, pool_spent) {
+            Ok((pc, spend)) => (Ok(pc), spend),
+            Err(e) => (Err(e), 0),
+        },
     };
-    Segment {
+    let segment = Segment {
         text: seg.text.clone(),
         result,
+    };
+    (segment, spend)
+}
+
+/// Parses every expanded segment in order, carrying the pool troops taken by
+/// earlier segments into later ones, so a chain is validated against the pool
+/// it will actually find (`a pt all ; f es 200` fails on the fortify).
+fn parse_chain(segs: &[alias::ExpandedSegment], ctx: &CommandContext<'_>) -> Vec<Segment> {
+    let mut out: Vec<Segment> = Vec::with_capacity(segs.len());
+    let mut spent: i64 = 0;
+    for seg in segs {
+        let (parsed, spend) = parse_expanded(seg, ctx, spent);
+        spent = spent.saturating_add(spend);
+        out.push(parsed);
     }
+    out
 }
 
 /// Analyzes the line being typed: parsed segments with hints or errors, ghost
@@ -217,15 +244,13 @@ pub fn analyze(input: &str, ctx: &CommandContext<'_>) -> Analysis {
         return out;
     }
     let expanded = alias::expand_line(input, ctx.aliases, ctx.last_line);
-    for seg in &expanded.segments {
-        out.segments.push(parse_expanded(seg, ctx));
-    }
+    out.segments = parse_chain(&expanded.segments, ctx);
     out.ghost = complete::ghost(input, ctx);
     if !out.ghost.is_empty() {
         let completed = out.accept_ghost(input);
         let again = alias::expand_line(&completed, ctx.aliases, ctx.last_line);
-        if let Some(last) = again.segments.last() {
-            if let Ok(pc) = parse_expanded(last, ctx).result {
+        if let Some(last) = parse_chain(&again.segments, ctx).pop() {
+            if let Ok(pc) = last.result {
                 out.ghost_hint = Some(pc.hint);
             }
         }
@@ -250,8 +275,7 @@ pub fn submit(line: &str, ctx: &CommandContext<'_>) -> SubmitResult {
     let multi = expanded.segments.len() > 1;
     let mut actions: Vec<Action> = Vec::new();
     let mut echoes: Vec<String> = Vec::new();
-    for seg in &expanded.segments {
-        let parsed = parse_expanded(seg, ctx);
+    for parsed in parse_chain(&expanded.segments, ctx) {
         match parsed.result {
             Ok(pc) => {
                 actions.push(pc.action);

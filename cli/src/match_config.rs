@@ -8,7 +8,8 @@
 //! 3. `--bots`, `--difficulty`, `--seed`, `--no-alliances` set their field.
 //! 4. `--win` sets the win condition. `--domination-pct` sets the domination
 //!    percent and, without `--win`, also switches the win condition to domination.
-//! 5. `--start` sets a fixed start region; `--bot-only-watch` sets `spectate`.
+//! 5. `--start` sets a fixed start region; `--bot-only-watch` sets `spectate`
+//!    and names player 0 `Bot-0` (it is a bot in that mode).
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -21,14 +22,19 @@ use crate::Failure;
 
 /// Domination percent used when switching to domination without a percent.
 const DEFAULT_DOMINATION_PCT: u8 = 60;
+/// Name of player 0 when it is a bot (`--bot-only-watch`, `--simulate`).
+pub const BOT_ONLY_NAME: &str = "Bot-0";
 
 /// The base config for interactive starts: the last match from the setup
-/// screen, or the standard preset. Per-match leftovers (spectating, a fixed
-/// start region) are reset.
+/// screen, or the standard preset. Per-match leftovers (spectating and its
+/// `Bot-0` name, a fixed start region) are reset.
 pub fn interactive_base(last: Option<&MatchConfig>) -> MatchConfig {
     match last {
         Some(cfg) => {
             let mut base = cfg.clone();
+            if base.spectate {
+                base.human_name = MatchConfig::default().human_name;
+            }
             base.spectate = false;
             base.start = StartChoice::Random;
             base
@@ -113,6 +119,7 @@ pub fn apply_flags(base: MatchConfig, cli: &Cli, map: &WorldMap) -> Result<Match
     }
     if cli.bot_only_watch {
         cfg.spectate = true;
+        cfg.human_name = BOT_ONLY_NAME.to_string();
     }
     Ok(cfg)
 }

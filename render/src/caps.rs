@@ -68,10 +68,11 @@ impl Default for Capabilities {
 }
 
 /// The renderer the user asked for in settings or with `--renderer`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum RendererChoice {
     /// Use whatever [`Capabilities::detect`] found.
+    #[default]
     Auto,
     /// Force the truecolor half-block renderer.
     TrueColor,
@@ -79,12 +80,6 @@ pub enum RendererChoice {
     Ansi256,
     /// Force the ASCII renderer with 16 colors.
     Ascii,
-}
-
-impl Default for RendererChoice {
-    fn default() -> RendererChoice {
-        RendererChoice::Auto
-    }
 }
 
 impl RendererChoice {
@@ -189,9 +184,10 @@ impl Capabilities {
             || truecolor_program
         {
             ColorMode::TrueColor
-        } else if term.contains("256color") || term.contains("256-color") {
-            ColorMode::Ansi256
-        } else if windows && term.is_empty() {
+        } else if term.contains("256color")
+            || term.contains("256-color")
+            || (windows && term.is_empty())
+        {
             ColorMode::Ansi256
         } else {
             ColorMode::Ansi16
@@ -208,9 +204,7 @@ impl Capabilities {
         let glyphs = if dumb {
             GlyphMode::Ascii
         } else if !locale.is_empty() {
-            if locale.contains("utf-8") || locale.contains("utf8") {
-                GlyphMode::Unicode
-            } else if windows || wt_session {
+            if locale.contains("utf-8") || locale.contains("utf8") || windows || wt_session {
                 GlyphMode::Unicode
             } else {
                 GlyphMode::Ascii

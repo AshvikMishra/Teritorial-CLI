@@ -56,10 +56,12 @@ pub enum StartMode {
     Setup(MatchConfig),
     /// Start this match right away (countdown, then play).
     Immediate(MatchConfig),
-    /// Continue a saved match.
-    Resume(Game),
-    /// Play a replay back (read-only), then show the game-over screen.
-    Replay(Replay),
+    /// Continue a saved match. The UI checks it against the map
+    /// ([`Game::check_map`]) before attaching the map.
+    Resume(Box<Game>),
+    /// Play a replay back (read-only), then show the game-over screen. The UI
+    /// validates it with `ReplayPlayer::try_new`.
+    Replay(Box<Replay>),
 }
 
 /// Everything [`crate::run`] needs.
@@ -87,7 +89,8 @@ pub trait Persistence {
     /// Names of the saved matches, newest first (the UI loads the first one
     /// for "load latest").
     fn list_saves(&self) -> Vec<String>;
-    /// Loads a saved match (the UI re-attaches the map either way).
+    /// Loads a saved match, checked against the map and with valid balance
+    /// values (the UI checks and re-attaches the map either way).
     fn load_game(&mut self, name: &str) -> Result<Game, String>;
     /// Saves a replay. Returns the path written.
     fn save_replay(&mut self, replay: &Replay) -> Result<String, String>;

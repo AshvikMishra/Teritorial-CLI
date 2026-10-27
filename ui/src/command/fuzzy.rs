@@ -5,7 +5,7 @@
 //!
 //! 1. exact region code, case-insensitive (`fr`, `US-W`);
 //! 2. exact name, ignoring case, spaces and punctuation (`south-africa`);
-//! 3. prefix of a code or name (`fra`, `us-s`);
+//! 3. prefix of a code or name, also ignoring punctuation (`fra`, `us-s`, `usw`);
 //! 4. prefix of any word of a name, or the name's initials (`korea`, `nz`);
 //! 5. subsequence of a name, for 3+ characters (`swtz`);
 //! 6. Damerau-Levenshtein distance of at most 1 (queries up to 4 characters)
@@ -16,6 +16,12 @@
 //! attackable for `info`/`focus`), that one is chosen, so `a br` picks the
 //! Brazil region you actually border. Otherwise the result is an error that
 //! lists up to three candidates, relevant ones first.
+//!
+//! One exception to "first stage wins": if stage 3 finds only regions that are
+//! not relevant to the verb, stage 4 is tried too and wins when it finds a
+//! relevant region (`a russia` picks the Russian region you border rather than
+//! the only name starting with "russia"). The looser stages 5 and 6 never
+//! override a prefix match.
 
 use territorial_core::{Game, PlayerId, RegionId};
 
@@ -85,8 +91,8 @@ pub fn edit_distance(a: &str, b: &str) -> usize {
     for i in 0..=n {
         d[i * w] = i;
     }
-    for j in 0..=m {
-        d[j] = j;
+    for (j, cell) in d.iter_mut().take(m + 1).enumerate() {
+        *cell = j;
     }
     for i in 1..=n {
         for j in 1..=m {
@@ -126,13 +132,9 @@ pub fn is_subsequence(needle: &str, hay: &str) -> bool {
 pub fn ci_prefix_rest(full: &str, typed: &str) -> Option<String> {
     let mut fi = full.chars();
     for t in typed.chars() {
-        match fi.next() {
-            Some(f) => {
-                if !f.to_lowercase().eq(t.to_lowercase()) {
-                    return None;
-                }
-            }
-            None => return None,
+        let f = fi.next()?;
+        if !f.to_lowercase().eq(t.to_lowercase()) {
+            return None;
         }
     }
     Some(fi.collect())
@@ -206,6 +208,12 @@ fn pick_region(
     Err(ambiguous_message(shown, items))
 }
 
+/// Whether `rel` is a real preference and at least one of `found` satisfies it.
+/// Always true for [`Relevance::Any`], so a match with no preference is final.
+fn any_relevant(game: &Game, player: PlayerId, found: &[RegionId], rel: Relevance) -> bool {
+    rel == Relevance::Any || found.iter().any(|&r| rel.matches(game, player, r))
+}
+
 /// Resolves a typed region reference (code, name, prefix, typo...) to a region.
 /// See the module docs for the stages. Errors are short human-readable reasons.
 pub fn resolve_region(
@@ -231,9 +239,9 @@ pub fn resolve_region(
     let qlen = q.chars().count();
     let mut found: Vec<RegionId> = Vec::new();
 
-    // 2. exact name (or code without punctuation, e.g. "usw")
+    // 2. exact name, ignoring case and punctuation
     for info in &map.regions {
-        if normalize(&info.name) == q || normalize(&info.code) == q {
+        if normalize(&info.name) == q {
             found.push(info.id);
         }
     }
@@ -241,7 +249,14 @@ pub fn resolve_region(
         return pick_region(game, player, shown, found, rel);
     }
 
-    // 3. prefix of code or name
+    // Stages 3 and 4 are prefix matches. A stage whose matches contain no
+    // region relevant to the verb does not end the search: the next prefix
+    // stage may find the relevant one (`a russia` -> the Russian region you
+    // border, not Russian Far East). If neither stage has a relevant match,
+    // the first non-empty one decides (and its error is reported).
+    let mut fallback: Option<Vec<RegionId>> = None;
+
+    // 3. prefix of code or name (includes a code without punctuation, e.g. "usw")
     for info in &map.regions {
         if info.code.to_lowercase().starts_with(lower.as_str())
             || normalize(&info.code).starts_with(q.as_str())
@@ -251,7 +266,10 @@ pub fn resolve_region(
         }
     }
     if !found.is_empty() {
-        return pick_region(game, player, shown, found, rel);
+        if any_relevant(game, player, &found, rel) {
+            return pick_region(game, player, shown, found, rel);
+        }
+        fallback = Some(std::mem::take(&mut found));
     }
 
     // 4. word prefix or initials
@@ -264,8 +282,11 @@ pub fn resolve_region(
             found.push(info.id);
         }
     }
-    if !found.is_empty() {
+    if !found.is_empty() && (fallback.is_none() || any_relevant(game, player, &found, rel)) {
         return pick_region(game, player, shown, found, rel);
+    }
+    if let Some(earlier) = fallback {
+        return pick_region(game, player, shown, earlier, rel);
     }
 
     // 5. subsequence

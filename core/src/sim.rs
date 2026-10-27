@@ -640,7 +640,10 @@ impl Game {
                 st.garrison = (st.garrison + add.max(0)).min(cap);
             } else if owned && st.garrison > cap {
                 let excess = st.garrison - cap;
-                st.garrison -= excess * decay / 1000;
+                // Rounded up so a small excess still drains to the cap, and
+                // never below the cap (decay 0 disables it).
+                let d = (excess * decay + 999) / 1000;
+                st.garrison -= d.clamp(0, excess);
             }
         }
     }

@@ -12,10 +12,11 @@ use territorial_core::{Game, PlayerId, RegionId, MAX_BOTS};
 use crate::caps::ColorMode;
 
 /// The available themes.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ThemeKind {
     /// Dark background, balanced saturated player colors (the default).
+    #[default]
     Dark,
     /// Black ocean, fully saturated colors and strong borders.
     #[serde(alias = "high-contrast", alias = "high_contrast")]
@@ -23,12 +24,6 @@ pub enum ThemeKind {
     /// Okabe-Ito based palette with lightness variants, safe for common color blindness.
     #[serde(alias = "colorblind", alias = "colorblind-safe", alias = "colorblind_safe")]
     ColorblindSafe,
-}
-
-impl Default for ThemeKind {
-    fn default() -> ThemeKind {
-        ThemeKind::Dark
-    }
 }
 
 impl ThemeKind {

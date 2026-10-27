@@ -46,7 +46,8 @@ pub struct Balance {
     pub garrison_regen_flat: i64,
     /// Extra regeneration per second, as permille of the gap to the cap.
     pub garrison_regen_permille: i64,
-    /// Garrison above the cap decays by this permille of the excess per second.
+    /// Garrison above the cap decays by this permille of the excess per second
+    /// (rounded up, so any excess drains back to the cap; 0 disables decay).
     pub garrison_overcap_decay_permille: i64,
     /// Neutral garrison with value 0.
     pub neutral_garrison_base: i64,

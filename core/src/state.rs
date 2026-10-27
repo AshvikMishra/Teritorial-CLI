@@ -756,13 +756,10 @@ impl Game {
                     continue;
                 }
                 seen[ni] = true;
-                match self.regions[ni].owner {
-                    Some(o) => {
-                        if o == p || self.are_allied(p, o) || self.has_truce(p, o) {
-                            continue;
-                        }
+                if let Some(o) = self.regions[ni].owner {
+                    if o == p || self.are_allied(p, o) || self.has_truce(p, o) {
+                        continue;
                     }
-                    None => {}
                 }
                 out.push(nb);
             }

@@ -13,7 +13,7 @@ use territorial_core::{
 use territorial_render::grouped_number;
 
 use crate::args::Cli;
-use crate::match_config::{apply_flags, time_seed};
+use crate::match_config::{apply_flags, time_seed, BOT_ONLY_NAME};
 use crate::text::clock;
 use crate::{Failure, EXIT_STALL};
 
@@ -29,7 +29,7 @@ const PROGRESS_EVERY_TICKS: u64 = 60 * TICKS_PER_SECOND;
 pub fn run(cli: &Cli, map: Arc<WorldMap>, balance: Balance) -> Result<ExitCode, Failure> {
     let mut cfg = apply_flags(MatchConfig::default(), cli, &map)?;
     cfg.spectate = true;
-    cfg.human_name = "Bot-0".to_string();
+    cfg.human_name = BOT_ONLY_NAME.to_string();
     if cli.seed.is_none() && cfg.seed == DEFAULT_SEED {
         cfg.seed = time_seed();
     }

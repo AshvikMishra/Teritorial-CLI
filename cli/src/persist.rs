@@ -9,6 +9,7 @@ use serde::Serialize;
 use territorial_core::{
     Game, Replay, SaveGame, WorldMap, REPLAY_FORMAT_VERSION, SAVE_FORMAT_VERSION,
 };
+use territorial_render::{RendererChoice, ThemeKind};
 use territorial_ui::{Persistence, Settings};
 
 use crate::paths::Paths;
@@ -31,12 +32,33 @@ struct SaveGameRef<'a> {
 /// Saves, replays and settings stored under [`Paths`].
 pub struct FilePersistence {
     paths: Paths,
+    /// `--theme` override for this run and the theme saved on disk.
+    theme_override: Option<(ThemeKind, ThemeKind)>,
+    /// `--renderer` override for this run and the renderer saved on disk.
+    renderer_override: Option<(RendererChoice, RendererChoice)>,
 }
 
 impl FilePersistence {
     /// Persistence rooted at the given paths.
     pub fn new(paths: Paths) -> FilePersistence {
-        FilePersistence { paths }
+        FilePersistence {
+            paths,
+            theme_override: None,
+            renderer_override: None,
+        }
+    }
+
+    /// Marks `flag` as a one-run `--theme` override of the saved `saved` theme:
+    /// settings are written with `saved` until the player picks another theme.
+    pub fn override_theme(&mut self, flag: ThemeKind, saved: ThemeKind) {
+        self.theme_override = Some((flag, saved));
+    }
+
+    /// Marks `flag` as a one-run `--renderer` override of the saved `saved`
+    /// renderer: settings are written with `saved` until the player picks
+    /// another renderer.
+    pub fn override_renderer(&mut self, flag: RendererChoice, saved: RendererChoice) {
+        self.renderer_override = Some((flag, saved));
     }
 
     /// Loads the settings. A missing file gives the defaults silently; an
@@ -100,6 +122,12 @@ impl FilePersistence {
             return Err(format!("save file '{}' not found", arg));
         }
         if let Some(dir) = &self.paths.saves_dir {
+            // The exact name first (files copied in by hand keep their names),
+            // then the sanitized name the game itself saves under.
+            let exact = dir.join(format!("{}.json", strip_json(arg)));
+            if exact.is_file() {
+                return Ok(exact);
+            }
             let name = sanitize_name(strip_json(arg));
             let candidate = dir.join(format!("{}.json", name));
             if candidate.is_file() {
@@ -236,13 +264,31 @@ impl Persistence for FilePersistence {
             Some(p) => p.clone(),
             None => return Err(NO_CONFIG_DIR.to_string()),
         };
-        let json = serde_json::to_string_pretty(s)
+        // Keep one-run --theme/--renderer overrides out of the file. Once the
+        // player picks a different value in the UI, that value is saved.
+        let mut out = s.clone();
+        if let Some((flag, saved)) = self.theme_override {
+            if out.theme == flag {
+                out.theme = saved;
+            } else {
+                self.theme_override = None;
+            }
+        }
+        if let Some((flag, saved)) = self.renderer_override {
+            if out.renderer == flag {
+                out.renderer = saved;
+            } else {
+                self.renderer_override = None;
+            }
+        }
+        let json = serde_json::to_string_pretty(&out)
             .map_err(|e| format!("cannot encode the settings: {}", e))?;
         write_file(&path, &json)
     }
 }
 
-/// Reads a save file and re-attaches the built-in map.
+/// Reads a save file, checks it against the built-in map and its balance
+/// values, and re-attaches the map.
 pub fn read_save(path: &Path) -> Result<Game, String> {
     let text = fs::read_to_string(path)
         .map_err(|e| format!("cannot read save {}: {}", path.display(), e))?;
@@ -256,7 +302,18 @@ pub fn read_save(path: &Path) -> Result<Game, String> {
             SAVE_FORMAT_VERSION
         ));
     }
-    Ok(save.into_game(WorldMap::builtin()))
+    let map = WorldMap::builtin();
+    let bad = |why: String| format!("{} is not a valid save file: {}", path.display(), why);
+    save.game.check_map(&map).map_err(bad)?;
+    save.game
+        .config()
+        .validate(&map)
+        .map_err(|e| bad(format!("invalid match settings: {}", e)))?;
+    save.game
+        .balance()
+        .validate()
+        .map_err(|e| bad(format!("invalid balance values: {}", e)))?;
+    Ok(save.into_game(map))
 }
 
 /// Reads a replay file.

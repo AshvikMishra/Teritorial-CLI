@@ -1157,7 +1157,7 @@ fn draw_help(app: &App, f: &mut Frame, area: Rect, pal: &Pal) {
         Some(h) => h,
         None => return,
     };
-    let w = area.width.saturating_sub(4).min(100).max(20);
+    let w = area.width.saturating_sub(4).clamp(20, 100);
     let want_h = (help.lines.len() as u16).saturating_add(2);
     let h = want_h.min(area.height.saturating_sub(2)).max(3);
     let rect = centered(area, w, h);
@@ -1200,12 +1200,16 @@ fn draw_game_over(app: &App, f: &mut Frame, area: Rect, pal: &Pal) {
     let allied = matches!(outcome, Some(Outcome::AlliedVictory { .. }));
     let can_watch =
         session.human_dead && !session.abandoned && !session.is_replay() && !game.is_over();
+    // A bot-only match (`--bot-only-watch`): player 0 was a bot, not the viewer.
+    let bot_only = game.config().spectate;
 
     let (art_text, headline, good): (&'static str, String, bool) = if session.abandoned {
         (art::DEFEAT, "YOU LEFT THE MATCH".to_string(), false)
     } else if outcome.is_some() {
         let prefix = if session.is_replay() { "REPLAY: " } else { "" };
-        if won && allied {
+        if bot_only {
+            (art::VICTORY, format!("{}MATCH OVER", prefix), true)
+        } else if won && allied {
             (art::VICTORY, format!("{}ALLIED VICTORY", prefix), true)
         } else if won {
             (art::VICTORY, format!("{}VICTORY", prefix), true)
@@ -1227,7 +1231,7 @@ fn draw_game_over(app: &App, f: &mut Frame, area: Rect, pal: &Pal) {
             pal.fg(pal.text).add_modifier(Modifier::BOLD),
         )));
     }
-    if let Some(me) = game.get_player(HUMAN) {
+    if let Some(me) = game.get_player(HUMAN).filter(|_| !bot_only) {
         if let Some(at) = me.stats.eliminated_at {
             let mut spans = vec![Span::styled(
                 format!("You were eliminated at {}", clock(at / TICKS_PER_SECOND)),

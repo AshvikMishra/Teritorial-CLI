@@ -94,7 +94,8 @@ pub struct Session {
     pub abandoned: bool,
     /// Result of the replay auto-save (path or error).
     pub replay_path: Option<Result<String, String>>,
-    replay_saved_tick: Option<u64>,
+    /// The replay was already auto-saved (it is saved once per match).
+    replay_saved: bool,
 }
 
 impl Session {
@@ -105,14 +106,14 @@ impl Session {
             spectating: false,
             abandoned: false,
             replay_path: None,
-            replay_saved_tick: None,
+            replay_saved: false,
         }
     }
 
     /// The game being shown.
     pub fn game(&self) -> &Game {
         match &self.driver {
-            Driver::Live(g) => &**g,
+            Driver::Live(g) => g,
             Driver::Replay(r) => r.game(),
         }
     }
@@ -357,10 +358,7 @@ impl App {
                 }
                 Err(RecvTimeoutError::Timeout) => {}
                 Err(RecvTimeoutError::Disconnected) => {
-                    return Err(io::Error::new(
-                        io::ErrorKind::Other,
-                        "the terminal input thread stopped",
-                    ));
+                    return Err(io::Error::other("the terminal input thread stopped"));
                 }
             }
             if self.quit {
@@ -587,8 +585,8 @@ impl App {
         match start {
             None | Some(StartMode::Setup(_)) => self.go_setup(None),
             Some(StartMode::Immediate(cfg)) => self.start_from_config(cfg),
-            Some(StartMode::Resume(game)) => self.resume(game, None),
-            Some(StartMode::Replay(replay)) => self.start_replay(replay),
+            Some(StartMode::Resume(game)) => self.resume(*game, None),
+            Some(StartMode::Replay(replay)) => self.start_replay(*replay),
         }
     }
 
@@ -620,6 +618,7 @@ impl App {
     }
 
     fn start_match(&mut self, cfg: MatchConfig) {
+        let spectate = cfg.spectate;
         let game = Game::new(Arc::clone(&self.map), self.balance.clone(), cfg);
         self.begin_session(Driver::Live(Box::new(game)), true);
         let summary = match session_game(&self.session) {
@@ -642,14 +641,29 @@ impl App {
             None => String::new(),
         };
         self.note(&summary, Tone::Accent);
-        self.note(
-            "Type commands at the prompt, e.g. `a <region> 30%`. `help` lists everything.",
-            Tone::Dim,
-        );
+        if spectate {
+            self.note(
+                "Bot-only match: you are watching. speed, pause, focus, info and quit still work.",
+                Tone::Accent,
+            );
+        } else {
+            self.note(
+                "Type commands at the prompt, e.g. `a <region> 30%`. `help` lists everything.",
+                Tone::Dim,
+            );
+        }
     }
 
     fn resume(&mut self, game: Game, name: Option<&str>) {
         let mut game = game;
+        if let Err(e) = game.check_map(&self.map) {
+            let what = match name {
+                Some(n) => format!("Could not load '{}': {}", n, e),
+                None => format!("Could not resume the match: {}", e),
+            };
+            self.go_setup(Some((what, true)));
+            return;
+        }
         game.attach_map(Arc::clone(&self.map));
         let when = log::clock(game.elapsed_secs());
         self.begin_session(Driver::Live(Box::new(game)), true);
@@ -664,7 +678,13 @@ impl App {
         let commands = replay.commands.len();
         let final_tick = replay.final_tick;
         let seed = replay.config.seed;
-        let player = ReplayPlayer::new(Arc::clone(&self.map), replay);
+        let player = match ReplayPlayer::try_new(Arc::clone(&self.map), replay) {
+            Ok(p) => p,
+            Err(e) => {
+                self.go_setup(Some((format!("Could not play the replay: {}", e), true)));
+                return;
+            }
+        };
         self.begin_session(Driver::Replay(Box::new(player)), false);
         self.note(
             &format!(
@@ -679,9 +699,21 @@ impl App {
 
     fn begin_session(&mut self, driver: Driver, countdown: bool) {
         let mut session = Session::new(driver);
-        {
+        let (live, over, spectate, human_alive) = {
             let g = session.game();
-            if !g.is_alive(HUMAN) && !g.is_over() && !session.is_replay() {
+            (
+                !session.is_replay(),
+                g.is_over(),
+                g.config().spectate,
+                g.is_alive(HUMAN),
+            )
+        };
+        if live && !over {
+            if spectate {
+                // A bot-only match (`--bot-only-watch`): player 0 is a bot too,
+                // so the viewer only watches.
+                session.spectating = true;
+            } else if !human_alive {
                 session.human_dead = true;
                 session.spectating = true;
             }
@@ -721,19 +753,12 @@ impl App {
         let mut saved: Option<Result<String, String>> = None;
         if let Some(s) = self.session.as_mut() {
             let replay = match &s.driver {
-                Driver::Live(g) => {
-                    let tick = g.tick();
-                    if s.replay_saved_tick == Some(tick) {
-                        None
-                    } else {
-                        Some((g.to_replay(), tick))
-                    }
-                }
-                Driver::Replay(_) => None,
+                Driver::Live(g) if !s.replay_saved => Some(g.to_replay()),
+                _ => None,
             };
-            if let Some((replay, tick)) = replay {
+            if let Some(replay) = replay {
                 let res = self.persistence.save_replay(&replay);
-                s.replay_saved_tick = Some(tick);
+                s.replay_saved = true;
                 s.replay_path = Some(res.clone());
                 saved = Some(res);
             }
@@ -789,7 +814,9 @@ impl App {
 
     fn handle_key(&mut self, key: KeyEvent) {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        if ctrl {
+        // Windows reports AltGr as Ctrl+Alt, so Ctrl+Alt+C is a typed character.
+        let alt = key.modifiers.contains(KeyModifiers::ALT);
+        if ctrl && !alt {
             if let KeyCode::Char(c) = key.code {
                 if c == 'c' || c == 'C' {
                     self.quit = true;
@@ -934,14 +961,16 @@ impl App {
             KeyCode::Backspace => edited = self.prompt.backspace(),
             KeyCode::Delete => edited = self.prompt.delete(),
             KeyCode::Char(c) => {
-                if ctrl {
+                // Windows reports AltGr (needed for '@' on many layouts) as Ctrl+Alt.
+                let altgr = ctrl && alt;
+                if ctrl && !altgr {
                     if c == 'u' {
                         self.prompt.clear();
                         edited = true;
                     } else if c == 'w' {
                         edited = self.prompt.delete_word();
                     }
-                } else if !alt {
+                } else if !alt || altgr {
                     if (c == '+' || c == '-') && self.prompt.is_empty() {
                         self.zoom_key(c);
                     } else {
@@ -1154,7 +1183,9 @@ impl App {
                 None => self.log.scroll_down(5),
             },
             KeyCode::Char(c) => {
-                if ctrl {
+                // Windows reports AltGr (needed for '@' on many layouts) as Ctrl+Alt.
+                let altgr = ctrl && alt;
+                if ctrl && !altgr {
                     match c {
                         'u' => {
                             self.prompt.clear();
@@ -1165,7 +1196,7 @@ impl App {
                         'e' => self.prompt.end(),
                         _ => {}
                     }
-                } else if !alt {
+                } else if !alt || altgr {
                     if (c == '+' || c == '-') && self.prompt.is_empty() {
                         self.zoom_key(c);
                     } else {

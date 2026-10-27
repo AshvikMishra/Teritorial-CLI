@@ -9,10 +9,14 @@
 //!   short form, which always win) is replaced by the alias body with `$1`..`$9`
 //!   set to the arguments, `$*` to all of them and `$$` to a literal `$`. A body
 //!   without placeholders gets the arguments appended. Missing `$n` arguments
-//!   and surplus arguments are errors.
+//!   are errors; surplus arguments are joined into the highest `$n`, so
+//!   multi-word region names work (`rush south africa` with `rush = a $1 80%`).
 //! * Bodies may chain with `;` and may use other aliases or `!!`. Expansion is
 //!   limited to [`MAX_ALIAS_DEPTH`] levels and [`MAX_SEGMENTS`] segments, so
 //!   recursive aliases fail with an error instead of hanging.
+//! * History stores the line as typed (aliases kept), except that a segment
+//!   which reached `!!`, directly or through an alias, is stored as the
+//!   commands it expanded to, so repeating it never refers back to itself.
 //!
 //! Alias definitions are validated by [`validate`]: names are 1 to 16
 //! characters of `a-z 0-9 - _` starting with a letter, may not be a built-in
@@ -47,8 +51,10 @@ pub struct ExpandedSegment {
 pub struct Expanded {
     /// Every resulting segment, in execution order. Empty segments are dropped.
     pub segments: Vec<ExpandedSegment>,
-    /// The line with top-level `!!` replaced (aliases kept as typed), segments
-    /// joined by `"; "`. This is what history and `last_line` should store.
+    /// The line as typed (aliases kept), except that each top-level segment
+    /// whose expansion reached `!!` is replaced by the commands it expanded
+    /// to; segments joined by `"; "`. This is what history and `last_line`
+    /// should store.
     pub history_line: String,
 }
 
@@ -148,20 +154,57 @@ fn join_args(args: &[String]) -> String {
     parts.join(" ")
 }
 
-/// Substitutes `$1`..`$9`, `$*` and `$$` in an alias body. Without any
-/// placeholder, the arguments are appended.
-pub fn substitute(body: &str, args: &[String]) -> Result<String, String> {
-    let chars: Vec<char> = body.chars().collect();
-    let mut out = String::with_capacity(body.len() + 16);
+/// The highest `$n` placeholder (0 if none) and whether `$*` occurs, scanning
+/// exactly like [`substitute`] does (`$$` is a literal `$`).
+fn placeholders(chars: &[char]) -> (usize, bool) {
     let mut max_ref: usize = 0;
     let mut star = false;
+    let mut i = 0usize;
+    while i < chars.len() {
+        if chars[i] == '$' && i + 1 < chars.len() {
+            let n = chars[i + 1];
+            if n == '*' {
+                star = true;
+                i += 2;
+                continue;
+            }
+            if n == '$' {
+                i += 2;
+                continue;
+            }
+            if let Some(d) = n.to_digit(10) {
+                if d >= 1 {
+                    max_ref = max_ref.max(d as usize);
+                    i += 2;
+                    continue;
+                }
+            }
+        }
+        i += 1;
+    }
+    (max_ref, star)
+}
+
+/// Substitutes `$1`..`$9`, `$*` and `$$` in an alias body. Without any
+/// placeholder, the arguments are appended. When the body uses `$n` (and no
+/// `$*`) and more arguments are given, the surplus ones are joined into the
+/// highest placeholder, so `rush south africa` works with `rush = a $1 80%`.
+pub fn substitute(body: &str, args: &[String]) -> Result<String, String> {
+    let chars: Vec<char> = body.chars().collect();
+    let (max_ref, star) = placeholders(&chars);
+    // Surplus arguments, folded into the highest placeholder as separate words.
+    let folded: Option<String> = if !star && max_ref > 0 && args.len() > max_ref {
+        Some(join_args(&args[max_ref - 1..]))
+    } else {
+        None
+    };
+    let mut out = String::with_capacity(body.len() + 16);
     let mut i = 0usize;
     while i < chars.len() {
         let c = chars[i];
         if c == '$' && i + 1 < chars.len() {
             let n = chars[i + 1];
             if n == '*' {
-                star = true;
                 out.push_str(&join_args(args));
                 i += 2;
                 continue;
@@ -174,12 +217,10 @@ pub fn substitute(body: &str, args: &[String]) -> Result<String, String> {
             if let Some(d) = n.to_digit(10) {
                 if d >= 1 {
                     let k = d as usize;
-                    if k > max_ref {
-                        max_ref = k;
-                    }
-                    match args.get(k - 1) {
-                        Some(a) => out.push_str(&quote_arg(a)),
-                        None => return Err(format!("missing argument ${}", k)),
+                    match (&folded, args.get(k - 1)) {
+                        (Some(f), _) if k == max_ref => out.push_str(f),
+                        (_, Some(a)) => out.push_str(&quote_arg(a)),
+                        (_, None) => return Err(format!("missing argument ${}", k)),
                     }
                     i += 2;
                     continue;
@@ -189,18 +230,9 @@ pub fn substitute(body: &str, args: &[String]) -> Result<String, String> {
         out.push(c);
         i += 1;
     }
-    if !star {
-        if max_ref == 0 {
-            if !args.is_empty() {
-                out.push(' ');
-                out.push_str(&join_args(args));
-            }
-        } else if args.len() > max_ref {
-            return Err(format!(
-                "too many arguments (takes {})",
-                max_ref
-            ));
-        }
+    if !star && max_ref == 0 && !args.is_empty() {
+        out.push(' ');
+        out.push_str(&join_args(args));
     }
     Ok(out)
 }
@@ -212,24 +244,26 @@ pub fn expand_line(
     last_line: Option<&str>,
 ) -> Expanded {
     let mut segments: Vec<ExpandedSegment> = Vec::new();
-    expand_text(line, aliases, last_line, 0, &mut segments);
-
     let mut parts: Vec<String> = Vec::new();
     for seg in lexer::split_chain(line) {
         if seg.is_empty() {
             continue;
         }
-        let toks = lexer::tokenize(&seg);
-        if let Some(first) = toks.first() {
-            if first.text == "!!" {
-                if let Some(last) = last_line {
-                    let rest: &str = seg.get(first.end..).unwrap_or("");
-                    parts.push(format!("{}{}", last.trim(), rest));
-                    continue;
-                }
+        let start = segments.len();
+        let mut used_bang = false;
+        expand_text(&seg, aliases, last_line, 0, &mut segments, &mut used_bang);
+        if used_bang {
+            // Store what actually ran, so history never holds a `!!` (typed or
+            // inside an alias) that would repeat itself next time.
+            let texts: Vec<&str> = segments[start..].iter().map(|s| s.text.as_str()).collect();
+            if texts.is_empty() {
+                parts.push(seg);
+            } else {
+                parts.push(texts.join("; "));
             }
+        } else {
+            parts.push(seg);
         }
-        parts.push(seg);
     }
     Expanded {
         segments,
@@ -250,6 +284,7 @@ fn expand_text(
     last_line: Option<&str>,
     depth: usize,
     out: &mut Vec<ExpandedSegment>,
+    used_bang: &mut bool,
 ) {
     for seg in lexer::split_chain(text) {
         if seg.is_empty() {
@@ -279,9 +314,10 @@ fn expand_text(
         if first.text == "!!" {
             match last_line {
                 Some(last) => {
+                    *used_bang = true;
                     let rest: &str = seg.get(first.end..).unwrap_or("");
                     let replaced = format!("{}{}", last.trim(), rest);
-                    expand_text(&replaced, aliases, last_line, depth + 1, out);
+                    expand_text(&replaced, aliases, last_line, depth + 1, out, used_bang);
                 }
                 None => push_error(out, &seg, "no previous command to repeat".to_string()),
             }
@@ -292,7 +328,9 @@ fn expand_text(
             if let Some(body) = aliases.get(lower.as_str()) {
                 let args: Vec<String> = toks[1..].iter().map(|t| t.text.clone()).collect();
                 match substitute(body, &args) {
-                    Ok(expanded) => expand_text(&expanded, aliases, last_line, depth + 1, out),
+                    Ok(expanded) => {
+                        expand_text(&expanded, aliases, last_line, depth + 1, out, used_bang)
+                    }
                     Err(e) => push_error(
                         out,
                         &seg,

@@ -48,7 +48,8 @@ garrison_cap_per_value = 25
 garrison_regen_flat = 1
 # Extra regeneration per second, as permille of the gap to the cap.
 garrison_regen_permille = 15
-# Garrison above the cap (from fortify or captures) decays by this permille of the excess per second.
+# Garrison above the cap (from fortify or captures) decays by this permille of the excess per second
+# (rounded up, so any excess drains back to the cap; 0 disables decay).
 garrison_overcap_decay_permille = 3
 # Neutral region garrison with value 0 (neutrals regenerate back up to their start garrison).
 neutral_garrison_base = 30

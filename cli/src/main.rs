@@ -82,18 +82,24 @@ fn run(cli: Cli) -> Result<ExitCode, Failure> {
 }
 
 fn run_interactive(cli: Cli, map: Arc<WorldMap>, balance: Balance) -> Result<ExitCode, Failure> {
-    let persistence = FilePersistence::new(Paths::detect());
+    let mut persistence = FilePersistence::new(Paths::detect());
     let mut warnings: Vec<String> = Vec::new();
 
     let (mut settings, settings_warning) = persistence.load_settings();
     if let Some(w) = settings_warning {
         warnings.push(w);
     }
+    // `--theme` / `--renderer` apply to this run only: the persistence keeps
+    // writing the saved values unless the player picks another one in the UI.
     if let Some(theme) = cli.theme {
-        settings.theme = theme.to_kind();
+        let kind = theme.to_kind();
+        persistence.override_theme(kind, settings.theme);
+        settings.theme = kind;
     }
     if let Some(renderer) = cli.renderer {
-        settings.renderer = renderer.to_choice();
+        let choice = renderer.to_choice();
+        persistence.override_renderer(choice, settings.renderer);
+        settings.renderer = choice;
     }
 
     let match_flags = cli.has_match_flags();
@@ -102,15 +108,9 @@ fn run_interactive(cli: Cli, map: Arc<WorldMap>, balance: Balance) -> Result<Exi
             warnings.push("match flags are ignored with --load".to_string());
         }
         let path = persistence.resolve_save(arg).map_err(Failure::usage)?;
+        // read_save checks the save against the map and validates its balance.
         let game = persist::read_save(&path).map_err(Failure::usage)?;
-        game.balance().validate().map_err(|e| {
-            Failure::usage(format!(
-                "save {} has invalid balance values: {}",
-                path.display(),
-                e
-            ))
-        })?;
-        StartMode::Resume(game)
+        StartMode::Resume(Box::new(game))
     } else if let Some(arg) = &cli.replay {
         if match_flags {
             warnings.push("match flags are ignored with --replay".to_string());
@@ -130,7 +130,7 @@ fn run_interactive(cli: Cli, map: Arc<WorldMap>, balance: Balance) -> Result<Exi
                 e
             ))
         })?;
-        StartMode::Replay(replay)
+        StartMode::Replay(Box::new(replay))
     } else {
         let base = match_config::interactive_base(settings.last_config.as_ref());
         let mut cfg = match_config::apply_flags(base, &cli, &map)?;

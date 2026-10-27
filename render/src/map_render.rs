@@ -177,6 +177,8 @@ impl MapRenderer {
         if area.width == 0 || area.height == 0 {
             return;
         }
+        // Let the camera clamp its center to what this view can show.
+        ctx.camera.note_view(area.width, area.height);
         let unicode = ctx.caps.glyphs == GlyphMode::Unicode;
         let rows_per_cell: u16 = if unicode { 2 } else { 1 };
         let key = GridKey {

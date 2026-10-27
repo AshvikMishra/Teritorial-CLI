@@ -2,7 +2,12 @@
 //!
 //! The world wraps around horizontally, so `cx` is kept in `0..world_w`.
 //! Vertically the renderer keeps the view inside the raster (or centers it when
-//! the whole height fits).
+//! the whole height fits). The renderer also tells the camera the size of the
+//! last view it drew ([`Camera::note_view`]), so the camera can keep `cy` inside
+//! the band the renderer can actually center on and every vertical pan moves
+//! the view.
+
+use std::cell::Cell;
 
 use serde::{Deserialize, Serialize};
 use territorial_core::{RegionId, WorldMap};
@@ -53,7 +58,7 @@ const WORLD_PAN_VIEW_W: f32 = 150.0;
 ///
 /// Build it with [`Camera::world`]. `world_w`/`world_h` are the raster size and are
 /// used to wrap and clamp the center; they are filled in by the constructor.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Camera {
     /// Center x in raster cells (wraps around).
     pub cx: f32,
@@ -65,6 +70,10 @@ pub struct Camera {
     pub world_w: f32,
     /// Raster height in cells.
     pub world_h: f32,
+    /// The last view size drawn, as `(columns, rows)` in terminal cells.
+    /// `(0, 0)` means unknown, and then `cy` is only clamped to the raster.
+    /// It is a `Cell` so the renderer can record it through `&Camera`.
+    view: Cell<(u16, u16)>,
 }
 
 impl Camera {
@@ -78,7 +87,16 @@ impl Camera {
             zoom: ZoomLevel::World,
             world_w: w,
             world_h: h,
+            view: Cell::new((0, 0)),
         }
+    }
+
+    /// Records the size of the map view, in terminal cells, that this camera
+    /// was last drawn into. The map renderer calls it on every draw. Later
+    /// camera moves use it to keep `cy` where the renderer can center the view,
+    /// so pans near the top and bottom edges are not swallowed.
+    pub fn note_view(&self, cols: u16, rows: u16) {
+        self.view.set((cols, rows));
     }
 
     /// Centers on region `r`'s label and zooms in to at least [`ZoomLevel::Continent`].
@@ -106,6 +124,9 @@ impl Camera {
     /// Pans by `dx`, `dy` screen cells, scaled by the zoom (one cell is one pixel wide
     /// and two pixels tall).
     pub fn pan(&mut self, dx: i32, dy: i32) {
+        // Snap to the reachable band first, so a center left outside it (for
+        // example by a camera reset before the first draw) does not eat the pan.
+        self.normalize();
         let s = self.pan_scale();
         self.cx += dx as f32 * s;
         self.cy += dy as f32 * s * 2.0;
@@ -119,6 +140,7 @@ impl Camera {
             ZoomLevel::Continent => ZoomLevel::Region,
             ZoomLevel::Region => ZoomLevel::Region,
         };
+        self.normalize();
     }
 
     /// Zooms out one level. Stays at World.
@@ -140,7 +162,14 @@ impl Camera {
         }
     }
 
-    /// Wraps `cx` into `0..world_w` and clamps `cy` into `0..=world_h`.
+    /// Wraps `cx` into `0..world_w` and clamps `cy`.
+    ///
+    /// With a known view size shorter than the raster, `cy` is clamped to the
+    /// band the renderer can center on, `view_h / 2 ..= world_h - view_h / 2`,
+    /// so every vertical pan moves the view. The view height matches the
+    /// renderer's: `rows * 2 * scale` raster rows. Otherwise (no view size yet,
+    /// or the whole height fits and the renderer centers the map) `cy` is only
+    /// clamped to `0..=world_h`, which keeps it for a later zoom in.
     fn normalize(&mut self) {
         let w = self.world_w.max(1.0);
         let h = self.world_h.max(1.0);
@@ -151,6 +180,16 @@ impl Camera {
             self.cy = h / 2.0;
         }
         self.cx = self.cx.rem_euclid(w);
-        self.cy = self.cy.clamp(0.0, h);
+        let (cols, rows) = self.view.get();
+        let vh = if rows > 0 {
+            f32::from(rows) * 2.0 * self.zoom.scale(cols, w)
+        } else {
+            0.0
+        };
+        self.cy = if vh > 0.0 && vh < h {
+            self.cy.clamp(vh / 2.0, h - vh / 2.0)
+        } else {
+            self.cy.clamp(0.0, h)
+        };
     }
 }

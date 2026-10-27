@@ -30,7 +30,15 @@ pub struct TerminalGuard {
 impl TerminalGuard {
     /// Enters raw mode and the alternate screen and returns the terminal.
     pub fn enter() -> io::Result<(TerminalGuard, DefaultTerminal)> {
-        let terminal = ratatui::try_init()?;
+        let terminal = match ratatui::try_init() {
+            Ok(t) => t,
+            Err(e) => {
+                // try_init may fail after raw mode (and the alternate screen)
+                // were entered; undo that so the error message is readable.
+                let _ = ratatui::try_restore();
+                return Err(e);
+            }
+        };
         let previous = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
             let _ = execute!(stdout(), Show);

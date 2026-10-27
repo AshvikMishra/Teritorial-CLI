@@ -142,12 +142,10 @@ impl Verb {
     /// Exact, case-insensitive match on the full verb or its short alias.
     pub fn from_exact(word: &str) -> Option<Verb> {
         let w = word.trim().to_lowercase();
-        for v in Verb::ALL.iter().copied() {
-            if v.name() == w.as_str() || v.short() == Some(w.as_str()) {
-                return Some(v);
-            }
-        }
-        None
+        Verb::ALL
+            .iter()
+            .copied()
+            .find(|&v| v.name() == w.as_str() || v.short() == Some(w.as_str()))
     }
 
     /// [`Verb::from_exact`], then a unique prefix (2+ characters) of a full
@@ -437,8 +435,24 @@ pub fn default_attack_pct(ctx: &CommandContext<'_>, region: RegionId) -> u8 {
 
 /// Parses one command segment (no `;`, aliases and `!!` already expanded).
 /// Game commands are validated with `Game::preview`, so a parse that succeeds
-/// would be accepted by the simulation right now.
+/// would be accepted by the simulation right now. For a segment that follows
+/// other commands in a chain, use [`parse_chained_segment`].
 pub fn parse_segment(text: &str, ctx: &CommandContext<'_>) -> Result<ParsedCommand, String> {
+    parse_chained_segment(text, ctx, 0).map(|(pc, _)| pc)
+}
+
+/// [`parse_segment`] for a segment of a chain whose earlier segments take
+/// `pool_spent` troops from the pool before this one runs. Attack and fortify
+/// amounts are checked against what is left of the pool, and percents are
+/// resolved on it for the hint (the queued command keeps its typed amount; the
+/// simulation resolves it on the pool at that moment, which is the same).
+/// Also returns how many pool troops this segment takes: the resolved amount
+/// for attack and fortify, 0 for everything else.
+pub fn parse_chained_segment(
+    text: &str,
+    ctx: &CommandContext<'_>,
+    pool_spent: i64,
+) -> Result<(ParsedCommand, i64), String> {
     let toks = lexer::tokenize(text);
     if toks.is_empty() {
         return Err("empty command".to_string());
@@ -449,32 +463,75 @@ pub fn parse_segment(text: &str, ctx: &CommandContext<'_>) -> Result<ParsedComma
     };
     let args: Vec<String> = toks[1..].iter().map(|t| t.text.clone()).collect();
     match verb {
-        Verb::Attack => parse_attack(&args, ctx),
-        Verb::Fortify | Verb::Recall => parse_garrison(verb, &args, ctx),
-        Verb::Ally | Verb::Unally => parse_diplomacy(verb, &args, ctx),
-        Verb::Info | Verb::Focus => parse_view(verb, &args, ctx),
-        Verb::Status => parse_status(&args, ctx),
-        Verb::Speed => parse_speed_cmd(&args),
+        Verb::Attack => parse_attack(&args, ctx, pool_spent),
+        Verb::Fortify | Verb::Recall => parse_garrison(verb, &args, ctx, pool_spent),
+        Verb::Ally | Verb::Unally => no_spend(parse_diplomacy(verb, &args, ctx)),
+        Verb::Info | Verb::Focus => no_spend(parse_view(verb, &args, ctx)),
+        Verb::Status => no_spend(parse_status(&args, ctx)),
+        Verb::Speed => no_spend(parse_speed_cmd(&args)),
         Verb::Pause => {
             no_args(verb, &args)?;
-            Ok(ParsedCommand {
-                action: Action::TogglePause,
-                hint: "PAUSE  pause or resume the game".to_string(),
-            })
+            Ok((
+                ParsedCommand {
+                    action: Action::TogglePause,
+                    hint: "PAUSE  pause or resume the game".to_string(),
+                },
+                0,
+            ))
         }
-        Verb::Alias => parse_alias(text, &toks, ctx),
-        Verb::Unalias => parse_unalias(&args, ctx),
-        Verb::Help => parse_help(&args),
-        Verb::Save => parse_save(&args),
+        Verb::Alias => no_spend(parse_alias(text, &toks, ctx)),
+        Verb::Unalias => no_spend(parse_unalias(&args, ctx)),
+        Verb::Help => no_spend(parse_help(&args)),
+        Verb::Save => no_spend(parse_save(&args)),
         Verb::Quit => {
             no_args(verb, &args)?;
-            Ok(ParsedCommand {
-                action: Action::Quit,
-                hint: "QUIT  leave the match".to_string(),
-            })
+            Ok((
+                ParsedCommand {
+                    action: Action::Quit,
+                    hint: "QUIT  leave the match".to_string(),
+                },
+                0,
+            ))
         }
-        Verb::Theme => parse_theme_cmd(&args),
+        Verb::Theme => no_spend(parse_theme_cmd(&args)),
     }
+}
+
+/// A parse result for a command that takes nothing from the pool.
+fn no_spend(r: Result<ParsedCommand, String>) -> Result<(ParsedCommand, i64), String> {
+    r.map(|pc| (pc, 0))
+}
+
+/// Troops an attack or fortify takes from the pool when earlier commands of
+/// the same chain already take `pool_spent`. `preview_troops` is what
+/// `Game::preview` resolved against the whole pool; `max_pct` caps percents
+/// (the balance's `max_attack_pct` for attacks, 100 for fortify).
+fn chained_troops(
+    ctx: &CommandContext<'_>,
+    amount: Amount,
+    preview_troops: i64,
+    pool_spent: i64,
+    max_pct: u32,
+) -> Result<i64, String> {
+    if pool_spent <= 0 {
+        return Ok(preview_troops);
+    }
+    let left = ctx.game.pool(ctx.player).saturating_sub(pool_spent).max(0);
+    let troops = match amount {
+        Amount::Percent(p) => {
+            let eff = (p as u32).min(max_pct.clamp(1, 100)) as i64;
+            left.saturating_mul(eff) / 100
+        }
+        Amount::Flat(_) => preview_troops,
+    };
+    if troops < 1 || troops > left {
+        return Err(format!(
+            "not enough troops after the earlier commands in this chain (needs {}, {} left)",
+            fmt_num(troops.max(1)),
+            fmt_num(left)
+        ));
+    }
+    Ok(troops)
 }
 
 fn verb_error(word: &str, ctx: &CommandContext<'_>) -> String {
@@ -534,7 +591,11 @@ fn split_target_amount(verb: Verb, args: &[String]) -> Result<(String, Option<Am
     Ok((args.join(" "), None))
 }
 
-fn parse_attack(args: &[String], ctx: &CommandContext<'_>) -> Result<ParsedCommand, String> {
+fn parse_attack(
+    args: &[String],
+    ctx: &CommandContext<'_>,
+    pool_spent: i64,
+) -> Result<(ParsedCommand, i64), String> {
     let (target_text, amount) = split_target_amount(Verb::Attack, args)?;
     let (region, smart) = target_region(&target_text, ctx, Relevance::Attackable)?;
     let amount = match amount {
@@ -549,11 +610,16 @@ fn parse_attack(args: &[String], ctx: &CommandContext<'_>) -> Result<ParsedComma
         .game
         .preview(ctx.player, &cmd)
         .map_err(|e| e.to_string())?;
-    let hint = attack_hint(ctx, region, smart.as_deref(), &pv, amount);
-    Ok(ParsedCommand {
-        action: Action::Game(cmd),
-        hint,
-    })
+    let max_pct = ctx.game.balance().max_attack_pct;
+    let troops = chained_troops(ctx, amount, pv.troops, pool_spent, max_pct)?;
+    let hint = attack_hint(ctx, region, smart.as_deref(), &pv, troops, amount);
+    Ok((
+        ParsedCommand {
+            action: Action::Game(cmd),
+            hint,
+        },
+        troops,
+    ))
 }
 
 fn amount_note(amount: Amount) -> String {
@@ -568,6 +634,7 @@ fn attack_hint(
     region: RegionId,
     smart: Option<&str>,
     pv: &CommandPreview,
+    troops: i64,
     amount: Amount,
 ) -> String {
     let game = ctx.game;
@@ -592,14 +659,14 @@ fn attack_hint(
         label,
         owner,
         fmt_num(pv.target_garrison),
-        fmt_num(pv.troops),
+        fmt_num(troops),
         amount_note(amount),
         eta
     );
     if en_route > 0 {
         s.push_str(&format!(", +{} en route", fmt_num(en_route)));
     }
-    let total = pv.troops.saturating_add(en_route);
+    let total = troops.saturating_add(en_route);
     if total > pv.defense_needed {
         s.push_str(&format!(
             "  [captures: defense {}]",
@@ -618,7 +685,8 @@ fn parse_garrison(
     verb: Verb,
     args: &[String],
     ctx: &CommandContext<'_>,
-) -> Result<ParsedCommand, String> {
+    pool_spent: i64,
+) -> Result<(ParsedCommand, i64), String> {
     let (target_text, amount) = split_target_amount(verb, args)?;
     if target_text.trim_start().starts_with('@') {
         return Err(format!(
@@ -646,6 +714,13 @@ fn parse_garrison(
         .game
         .preview(ctx.player, &cmd)
         .map_err(|e| e.to_string())?;
+    // Fortify takes from the pool (shared with earlier commands of a chain);
+    // recall takes from the region's garrison and returns troops only later.
+    let spend = if verb == Verb::Fortify {
+        chained_troops(ctx, amount, pv.troops, pool_spent, 100)?
+    } else {
+        0
+    };
     let name = ctx.game.map().region(region).name.clone();
     let g = pv.target_garrison;
     let hint = if verb == Verb::Fortify {
@@ -653,9 +728,9 @@ fn parse_garrison(
             "FORTIFY  {} (garrison {})  +{} troops from pool{} -> {}, fortified for {}",
             name,
             fmt_num(g),
-            fmt_num(pv.troops),
+            fmt_num(spend),
             amount_note(amount),
-            fmt_num(g.saturating_add(pv.troops)),
+            fmt_num(g.saturating_add(spend)),
             fmt_ticks(ctx.game.balance().fortify_duration_ticks)
         )
     } else {
@@ -668,10 +743,13 @@ fn parse_garrison(
             fmt_ticks(ctx.game.balance().recall_delay_ticks)
         )
     };
-    Ok(ParsedCommand {
-        action: Action::Game(cmd),
-        hint,
-    })
+    Ok((
+        ParsedCommand {
+            action: Action::Game(cmd),
+            hint,
+        },
+        spend,
+    ))
 }
 
 fn parse_diplomacy(

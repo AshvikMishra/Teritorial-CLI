@@ -266,7 +266,7 @@ impl WorldMap {
                 length_km: length,
             });
         }
-        edges.sort_by(|x, y| (x.a, x.b).cmp(&(y.a, y.b)));
+        edges.sort_by_key(|x| (x.a, x.b));
         edges.dedup_by(|x, y| x.a == y.a && x.b == y.b);
 
         // Bitmap.

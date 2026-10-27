@@ -208,19 +208,7 @@ fn complete_target_or_amount(verb: Verb, args: &[&str], ctx: &CommandContext<'_>
         return String::new();
     }
     let troops = matches!(verb, Verb::Attack | Verb::Fortify | Verb::Recall);
-    // Arguments before the current one may already name a complete target, in
-    // which case the current token is an amount.
-    if troops && idx >= 1 {
-        let before = args[..idx].join(" ");
-        let target_done = before.trim_start().starts_with('@')
-            || fuzzy::resolve_region(ctx.game, ctx.player, &before, parser::relevance_for(verb))
-                .is_ok();
-        if target_done {
-            if let Some(g) = complete_amount(cur) {
-                return g;
-            }
-        }
-    }
+    // A leading amount (`a 40% fr`) is not part of the target phrase.
     let start = if troops && args.len() > 1 && parser::looks_like_amount(args[0]) {
         1
     } else {
@@ -230,6 +218,30 @@ fn complete_target_or_amount(verb: Verb, args: &[&str], ctx: &CommandContext<'_>
         return String::new();
     }
     let phrase = args[start..].join(" ");
+    // Arguments before the current one may already name a complete target, in
+    // which case the current token is an amount.
+    if troops && idx >= 1 {
+        let before = args[..idx].join(" ");
+        let target_done = before.trim_start().starts_with('@')
+            || fuzzy::resolve_region(ctx.game, ctx.player, &before, parser::relevance_for(verb))
+                .is_ok();
+        if target_done {
+            // The current word may still be part of a multi-word name
+            // (`a saudi a` -> "rabia", `f bosnia and h` -> "erzegovina"):
+            // finishing the name wins over turning the word into an amount
+            // like `all`. Region names have no digits, so `40` stays an amount.
+            let digits = cur.chars().all(|c| c.is_ascii_digit());
+            if !digits && !before.trim_start().starts_with('@') {
+                let region_ghost = complete_region(&phrase, parser::relevance_for(verb), ctx);
+                if !region_ghost.is_empty() {
+                    return region_ghost;
+                }
+            }
+            if let Some(g) = complete_amount(cur) {
+                return g;
+            }
+        }
+    }
     if troops && start == 0 && idx == 0 && parser::looks_like_amount(cur) {
         // A leading amount (`a 40`): complete it as an amount.
         return complete_amount(cur).unwrap_or_default();

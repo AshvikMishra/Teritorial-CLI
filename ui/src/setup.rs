@@ -108,7 +108,7 @@ pub struct SetupForm {
     pub seed: u64,
     pub theme: ThemeKind,
     pub renderer: RendererChoice,
-    /// The rest of the config (name, growth, spectate) is carried over from here.
+    /// The rest of the config (the player name) is carried over from here.
     base: MatchConfig,
     /// True right after a field is selected: the next digit replaces the value.
     fresh: bool,
@@ -123,9 +123,17 @@ impl SetupForm {
             WinCondition::Timed => (WinKind::Timed, 60),
         };
         let minutes = match cfg.time_limit_secs {
-            Some(s) => (s + 59) / 60,
+            Some(s) => s.div_ceil(60),
             None => 0,
         };
+        // Per-match leftovers are not carried into the next match: the setup
+        // screen never starts a bot-only match or a fixed start region.
+        let mut base = cfg.clone();
+        if base.spectate {
+            base.human_name = MatchConfig::default().human_name;
+        }
+        base.spectate = false;
+        base.start = StartChoice::Random;
         SetupForm {
             selected: 0,
             preset: cfg.preset,
@@ -140,7 +148,7 @@ impl SetupForm {
             seed: if cfg.seed == DEFAULT_SEED { 0 } else { cfg.seed },
             theme,
             renderer,
-            base: cfg.clone(),
+            base,
             fresh: true,
         }
     }
@@ -271,11 +279,7 @@ impl SetupForm {
             }
             Field::Bots => self.bots /= 10,
             Field::DominationPct => self.dom_pct /= 10,
-            Field::Seed => {
-                if !self.seed_random {
-                    self.seed /= 10;
-                }
-            }
+            Field::Seed if !self.seed_random => self.seed /= 10,
             _ => {}
         }
     }
@@ -345,7 +349,8 @@ impl SetupForm {
         self.clamp_values();
         let mut cfg = MatchConfig::preset(self.preset);
         cfg.human_name = self.base.human_name.clone();
-        cfg.spectate = self.base.spectate;
+        // The setup screen never offers spectating.
+        cfg.spectate = false;
         if self.preset == Preset::Custom {
             if self.minutes == 0 {
                 cfg.time_limit_secs = None;

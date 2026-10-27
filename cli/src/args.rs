@@ -64,11 +64,11 @@ pub struct Cli {
     #[arg(long)]
     pub no_alliances: bool,
 
-    /// Color theme (overrides the saved setting).
+    /// Color theme for this run (the saved setting is kept).
     #[arg(long, value_enum)]
     pub theme: Option<ThemeArg>,
 
-    /// Map renderer (overrides the saved setting).
+    /// Map renderer for this run (the saved setting is kept).
     #[arg(long, value_enum)]
     pub renderer: Option<RendererArg>,
 
@@ -96,7 +96,7 @@ pub struct Cli {
     #[arg(long, value_name = "N", requires = "simulate")]
     pub max_ticks: Option<u64>,
 
-    /// Watch a bot-only match in the TUI (player 0 is a bot too).
+    /// Watch a bot-only match in the TUI (player 0 is the bot Bot-0; read-only).
     #[arg(long, conflicts_with = "simulate")]
     pub bot_only_watch: bool,
 }
