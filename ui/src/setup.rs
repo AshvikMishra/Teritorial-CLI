@@ -20,11 +20,13 @@ pub enum Field {
     Seed,
     Theme,
     Renderer,
+    HowToPlay,
+    Play,
 }
 
 impl Field {
     /// Every field in display order.
-    pub const ALL: [Field; 11] = [
+    pub const ALL: [Field; 13] = [
         Field::Preset,
         Field::Minutes,
         Field::Bots,
@@ -36,6 +38,8 @@ impl Field {
         Field::Seed,
         Field::Theme,
         Field::Renderer,
+        Field::HowToPlay,
+        Field::Play,
     ];
 
     /// Row label.
@@ -52,6 +56,8 @@ impl Field {
             Field::Seed => "Seed",
             Field::Theme => "Theme",
             Field::Renderer => "Renderer",
+            Field::HowToPlay => "HOW TO PLAY",
+            Field::Play => "PLAY",
         }
     }
 
@@ -59,9 +65,9 @@ impl Field {
     pub fn help(self) -> &'static str {
         match self {
             Field::Preset => "Blitz 8 min / Standard 25 min / Epic 75 min; Custom uses your own length",
-            Field::Minutes => "Type minutes (0 = no timer, not for Timed); changing it switches to Custom",
+            Field::Minutes => "Type match length in minutes (minimum 1); changing it switches to Custom",
             Field::Bots => "Number of bot opponents, 3 to 40 (type a number)",
-            Field::Difficulty => "Easy reacts slowly; Hard coordinates attacks; Mixed varies per bot",
+            Field::Difficulty => "Easy: 20-32s decisions; Normal: 10-16s; Hard: 4-7s; Mixed varies per bot",
             Field::Win => "Domination: hold a share of world value; Elimination: last standing; Timed: best score",
             Field::DominationPct => "Share of total world value needed to win by domination (10-100)",
             Field::Start => "Random spaced start, or choose your start region on the map",
@@ -69,6 +75,8 @@ impl Field {
             Field::Seed => "Random, or type digits for a fixed, repeatable seed",
             Field::Theme => "Color theme (saved in your settings)",
             Field::Renderer => "Map renderer (saved in your settings)",
+            Field::HowToPlay => "Press Enter to learn the rules, commands and controls before playing",
+            Field::Play => "Press Enter to start with these settings",
         }
     }
 }
@@ -153,6 +161,15 @@ impl SetupForm {
         }
     }
 
+    /// Whether a field applies to the current win condition.
+    pub fn field_visible(&self, field: Field) -> bool {
+        match field {
+            Field::Minutes => self.win == WinKind::Timed,
+            Field::DominationPct => self.win == WinKind::Domination,
+            _ => true,
+        }
+    }
+
     /// The selected field.
     pub fn field(&self) -> Field {
         Field::ALL[self.selected.min(Field::ALL.len() - 1)]
@@ -166,6 +183,9 @@ impl SetupForm {
         } else {
             self.selected - 1
         };
+        if !self.field_visible(self.field()) {
+            self.up();
+        }
         self.fresh = true;
     }
 
@@ -173,6 +193,9 @@ impl SetupForm {
     pub fn down(&mut self) {
         self.clamp_values();
         self.selected = (self.selected + 1) % Field::ALL.len();
+        if !self.field_visible(self.field()) {
+            self.down();
+        }
         self.fresh = true;
     }
 
@@ -189,7 +212,7 @@ impl SetupForm {
             Field::Minutes => {
                 let step: u32 = if self.minutes >= 30 { 5 } else { 1 };
                 if dir < 0 {
-                    self.minutes = self.minutes.saturating_sub(step);
+                    self.minutes = self.minutes.saturating_sub(step).max(1);
                 } else {
                     self.minutes = (self.minutes + step).min(600);
                 }
@@ -211,6 +234,7 @@ impl SetupForm {
                 let all = [WinKind::Domination, WinKind::Elimination, WinKind::Timed];
                 let idx = all.iter().position(|w| *w == self.win).unwrap_or(0);
                 self.win = all[cycle(idx, all.len(), dir)];
+                self.clamp_values();
             }
             Field::DominationPct => {
                 if dir < 0 {
@@ -234,6 +258,7 @@ impl SetupForm {
                 self.renderer = all[cycle(idx, all.len(), dir)];
                 return FormChange::Renderer;
             }
+            Field::HowToPlay | Field::Play => {}
         }
         FormChange::None
     }
@@ -244,7 +269,7 @@ impl SetupForm {
         self.fresh = false;
         match self.field() {
             Field::Minutes => {
-                self.minutes = push_digit(self.minutes, d, fresh, 600);
+                self.minutes = push_digit(self.minutes, d, fresh, 600).max(1);
                 self.preset = Preset::Custom;
                 true
             }
@@ -274,7 +299,7 @@ impl SetupForm {
         self.fresh = false;
         match self.field() {
             Field::Minutes => {
-                self.minutes /= 10;
+                self.minutes = (self.minutes / 10).max(1);
                 self.preset = Preset::Custom;
             }
             Field::Bots => self.bots /= 10,
@@ -289,7 +314,9 @@ impl SetupForm {
         match f {
             Field::Preset => capitalize(self.preset.name()),
             Field::Minutes => {
-                if self.minutes == 0 {
+                if self.win == WinKind::Domination {
+                    format!("{} min pacing (no timer)", self.minutes)
+                } else if self.minutes == 0 {
                     "no timer".to_string()
                 } else {
                     format!("{} min", self.minutes)
@@ -332,6 +359,7 @@ impl SetupForm {
             }
             Field::Theme => self.theme.label().to_string(),
             Field::Renderer => self.renderer.name().to_string(),
+            Field::HowToPlay | Field::Play => "Press Enter".to_string(),
         }
     }
 
@@ -394,7 +422,11 @@ impl SetupForm {
     fn clamp_values(&mut self) {
         self.bots = self.bots.clamp(3, u32::from(MAX_BOTS));
         self.dom_pct = self.dom_pct.clamp(10, 100);
-        self.minutes = self.minutes.min(600);
+        self.minutes = if self.win == WinKind::Timed {
+            self.minutes.clamp(1, 600)
+        } else {
+            self.minutes.min(600)
+        };
     }
 }
 
@@ -446,4 +478,49 @@ pub fn random_seed() -> u64 {
     z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
     z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
     z ^ (z >> 31)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mode_specific_fields_and_navigation() {
+        let mut form = SetupForm::from_config(&MatchConfig::default(), ThemeKind::Dark, RendererChoice::Auto);
+        for win in [WinKind::Domination, WinKind::Elimination, WinKind::Timed] {
+            form.win = win;
+            assert_eq!(form.field_visible(Field::Minutes), win == WinKind::Timed);
+            assert_eq!(form.field_visible(Field::DominationPct), win == WinKind::Domination);
+            form.selected = 0;
+            for _ in 0..Field::ALL.len() * 2 {
+                form.down();
+                assert!(form.field_visible(form.field()));
+            }
+            for _ in 0..Field::ALL.len() * 2 {
+                form.up();
+                assert!(form.field_visible(form.field()));
+            }
+        }
+    }
+
+    #[test]
+    fn timed_setup_always_has_a_positive_duration() {
+        let mut form = SetupForm::from_config(&MatchConfig::default(), ThemeKind::Dark, RendererChoice::Auto);
+        form.win = WinKind::Elimination;
+        form.minutes = 0;
+        form.selected = Field::ALL.iter().position(|&f| f == Field::Win).unwrap();
+        form.change(1);
+        assert_eq!(form.win, WinKind::Timed);
+        assert!(form.minutes > 0);
+        form.selected = Field::ALL.iter().position(|&f| f == Field::Minutes).unwrap();
+        form.change(-1);
+        assert!(form.minutes > 0);
+        form.digit(0);
+        assert!(form.minutes > 0);
+        form.backspace();
+        assert!(form.minutes > 0);
+        let (cfg, _) = form.build();
+        assert!(cfg.validate(&territorial_core::WorldMap::builtin()).is_ok());
+        assert!(cfg.active_time_limit_secs().unwrap() > 0);
+    }
 }

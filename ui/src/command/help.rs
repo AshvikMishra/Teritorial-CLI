@@ -245,26 +245,43 @@ pub fn topic_key(word: &str) -> Option<&'static str> {
 
 /// The command overview shown by plain `help`.
 pub fn overview() -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    out.push("COMMANDS  <verb> <target> [amount]    chain with ;    repeat with !!".to_string());
+    let mut out = vec![
+        "COMMAND REFERENCE".to_string(),
+        "  Type the example command, then press Enter.".to_string(),
+        "  Full names and shortcuts both work.".to_string(),
+        String::new(),
+    ];
     for v in Verb::ALL.iter().copied() {
-        let d = doc(v);
-        out.push(format!(
-            "  {:<8} {:<3} {:<20} {}",
-            v.name(),
-            v.short().unwrap_or(""),
-            example(v),
-            d.summary
-        ));
+        let heading = match v.short() {
+            Some(short) => format!("{} (shortcut: {})", v.name().to_uppercase(), short),
+            None => v.name().to_uppercase(),
+        };
+        out.push(heading);
+        out.push(format!("  Example: {}", example(v)));
+        out.push(format!("  {}", doc(v).summary));
+        out.push(String::new());
     }
-    out.push("SMART TARGETS  @weakest  @richest  @player:<name> (or @p:<name>)".to_string());
-    out.push("AMOUNTS  40%  500  4,200  1.2k  half  all".to_string());
-    out.push(
-        "KEYS  Tab accept hint | Up/Down history | Esc clear | Shift/Ctrl+arrows pan | +/- zoom (empty prompt) | PgUp/PgDn log"
-            .to_string(),
-    );
-    out.push("MORE  help <command>    help targets | amounts | chain | keys".to_string());
-    out
+    out.extend([
+        "SMART TARGETS",
+        "  @weakest  @richest  @player:<name>",
+        "  @p:<name> is short for @player:<name>.",
+        "",
+        "AMOUNTS",
+        "  40%  500  4,200  1.2k  half  all",
+        "",
+        "COMMAND SHORTCUTS",
+        "  Separate commands with ; to chain them.",
+        "  Type !! to repeat your last command line.",
+        "",
+        "MORE HELP",
+        "  help attack   Details for a command",
+        "  help targets  Region names and smart targets",
+        "  help amounts  Troop amounts and percentages",
+        "  help chain    Chaining and repeating commands",
+        "  help keys     Keyboard controls",
+    ].iter().map(|s| (*s).to_string()));
+    wrap_help(out)
+
 }
 
 /// Full help for one verb: title, usage, details and examples.
@@ -369,4 +386,65 @@ pub fn help_lines(topic: Option<&str>) -> Vec<String> {
             out
         }
     }
+}
+
+
+/// Setup guide: rules and concrete commands, available before a match exists.
+pub fn before_play() -> Vec<String> {
+    let mut lines: Vec<String> = [
+        "HOW TO PLAY",
+        "  Grow your troop pool, capture neighboring regions and defend your land.",
+        "  Commands are typed at the bottom of the screen; Enter submits them.",
+        "",
+        "WIN CONDITIONS",
+        "  Domination: reach the chosen share of world value. No timer or allied win.",
+        "  Elimination: be the last player or mutual alliance standing. No timer.",
+        "  Timed: have the highest score when the time limit expires.",
+        "",
+        "YOUR FIRST MOVES",
+        "  i             Inspect your capital and its neighbors.",
+        "  a fr 40%      Attack France with 40% of your pool, if it borders you.",
+        "  a @weakest 25%  Attack your weakest bordering enemy, or a neutral.",
+        "  f fr 200      Fortify France with 200 pool troops, if you own it.",
+        "  r fr 100      Recall 100 garrison troops to your pool, if you own it.",
+        "  p             Pause or resume while you plan your next move.",
+        "",
+        "ATTACK BASICS",
+        "  Targets must share a land border or sea lane with your territory.",
+        "  Troops take time to arrive; send enough to overcome the defense bonus.",
+        "  Your pool grows over time. Keeping reserves helps defend against attacks.",
+        "  Targets accept region codes or names; amounts accept 40%, 500, half or all.",
+        "",
+    ].iter().map(|s| (*s).to_string()).collect();
+    lines.extend(overview());
+    lines.push(String::new());
+    if let Some(keys) = topic_lines("keys") {
+        lines.extend(keys);
+    }
+    lines.push(String::new());
+    lines.push("  Esc or Enter returns to setup. Select PLAY and press Enter when ready.".to_string());
+    wrap_help(lines)
+}
+
+// Fit the smallest supported terminal, including popup margins and borders.
+fn wrap_help(lines: Vec<String>) -> Vec<String> {
+    let mut wrapped = Vec::new();
+    for line in lines {
+        if line.len() <= 52 {
+            wrapped.push(line);
+            continue;
+        }
+        let indent = if line.starts_with("  ") { "  " } else { "" };
+        let mut row = indent.to_string();
+        for word in line.split_whitespace() {
+            if row.len() + word.len() + 1 > 52 {
+                wrapped.push(row);
+                row = "  ".to_string();
+            }
+            if !row.trim().is_empty() { row.push(' '); }
+            row.push_str(word);
+        }
+        wrapped.push(row);
+    }
+    wrapped
 }

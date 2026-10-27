@@ -92,12 +92,12 @@ impl Difficulty {
 /// How the match is won.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WinCondition {
-    /// Control `pct` percent of total world value (also ends on elimination or timer).
+    /// Control `pct` percent of total world value (also ends on elimination).
     Domination {
         /// Required share of world value, 10..=100.
         pct: u8,
     },
-    /// Last player (or allied clique) standing (also ends on the timer).
+    /// Last player (or allied clique) standing; no time limit.
     Elimination,
     /// Highest score when the timer ends.
     Timed,
@@ -129,7 +129,8 @@ pub enum StartChoice {
 pub struct MatchConfig {
     /// The preset this config came from.
     pub preset: Preset,
-    /// Match timer in seconds. `None` = no timer (Domination/Elimination only).
+    /// Configured timer in seconds. Ignored for Domination/Elimination; also sets preset pacing.
+    /// `None` = no timer (Domination/Elimination only).
     pub time_limit_secs: Option<u32>,
     /// Pool growth scaling, 100 = normal.
     pub growth_scale_pct: u32,
@@ -247,9 +248,17 @@ impl MatchConfig {
         Ok(())
     }
 
+    /// Active time limit in seconds. Only Timed matches have a deadline.
+    pub fn active_time_limit_secs(&self) -> Option<u32> {
+        match self.win {
+            WinCondition::Timed => self.time_limit_secs,
+            _ => None,
+        }
+    }
+
     /// Time limit in ticks, if any.
     pub fn time_limit_ticks(&self) -> Option<u64> {
-        self.time_limit_secs
+        self.active_time_limit_secs()
             .map(|s| s as u64 * crate::TICKS_PER_SECOND)
     }
 }

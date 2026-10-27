@@ -398,7 +398,7 @@ impl Game {
     /// Seconds left on the match timer, if there is one.
     pub fn remaining_secs(&self) -> Option<u64> {
         self.config
-            .time_limit_secs
+            .active_time_limit_secs()
             .map(|t| (t as u64).saturating_sub(self.elapsed_secs()))
     }
 

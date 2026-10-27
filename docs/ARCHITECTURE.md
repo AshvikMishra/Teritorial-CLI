@@ -309,8 +309,8 @@ pub enum EventKind {
 - **Alliances** (only when `config.alliances`): `ProposeAlliance{with}` forms the alliance if `with` already proposed to the proposer. Otherwise it records a proposal that expires after `proposal_ttl_ticks`. A player can have at most `max_allies` allies. `BreakAlliance` ends it immediately and starts a truce of `truce_ticks` during which neither side may attack the other. Allies can't attack each other, and marches already in flight toward a new ally return to the pool on arrival.
 - **Win checks**, in order:
   1. **Domination**: `land_pct >= pct`. One winner, chosen by highest score if several qualify.
-  2. **Elimination**: one player alive, or every alive player is in one mutual alliance clique. That gives `AlliedVictory`, and `top` is the highest score.
-  3. **Timer**: at the time limit, under any condition, the highest score wins. Ties go to the lower id.
+  2. **Elimination**: one player alive, or, in Elimination mode only, every alive player is in one mutual alliance clique. That gives `AlliedVictory`, and `top` is the highest score.
+  3. **Timer**: at the time limit, in Timed matches, the highest score wins. Ties go to the lower id.
   4. With `Timed`, only rule 3 applies.
 
   The human being eliminated does not stop the sim. The UI shows the defeat screen and may let bots finish.
@@ -376,7 +376,7 @@ impl Theme {
     // + accessor fns for ui accents: accent(), dim(), warn(), good(), bad(), text(), panel_bg()
 }
 
-pub enum ZoomLevel { World, Continent, Region }
+pub enum ZoomLevel { World, Overview, Wide, Continent, Area, Local, Region }
 pub struct Camera { pub cx: f32, pub cy: f32, pub zoom: ZoomLevel }  // center in raster coords
 impl Camera {
     pub fn world(map: &WorldMap) -> Camera;

@@ -44,7 +44,7 @@ pub fn run(cli: &Cli, map: Arc<WorldMap>, balance: Balance) -> Result<ExitCode, 
         },
     };
 
-    let timer = match cfg.time_limit_secs {
+    let timer = match cfg.active_time_limit_secs() {
         Some(s) => clock(u64::from(s)),
         None => "none".to_string(),
     };
