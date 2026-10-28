@@ -2,9 +2,10 @@
 
 A real-time territory conquest game for the terminal, inspired by territorial.io.
 You start with one region of a colored world map, grow a national troop pool, and
-conquer your neighbors faster than up to 40 bots. There is no mouse and no hotkey
-spam: every move is a typed command such as `a fr 40%`. Your typing speed,
-command fluency and map knowledge decide how good you are.
+conquer your neighbors faster than up to 40 bots. There is no mouse: you steer a
+crosshair over the map and act on the region under it with single hotkeys (`a`
+attacks, `1`-`0` set the amount), and a full command line (`:a fr 40%`) is one
+key away. Your speed, fluency and map knowledge decide how good you are.
 
 - About 214 regions (countries, with large ones split into parts like `us-w` and
   `ru-e`), connected by land borders and curated sea lanes.
@@ -53,7 +54,7 @@ the game switches to a compact layout. Below 60x20 it asks you to enlarge the wi
 | `--load <save>` | Resume a saved match, given as a save name or a path to a `.json` file |
 | `--replay <file>` | Watch a replay (read-only), given as a path or a name in the replays folder |
 | `--quick` | Skip the splash and setup screens and start immediately |
-| `--bot-only-watch` | Watch a match played only by bots in the TUI. Player 0 is also a bot (`Bot-0`). The prompt is read-only: speed, pause, focus, info, status, help, theme and quit work. |
+| `--bot-only-watch` | Watch a match played only by bots in the TUI. Player 0 is also a bot (`Bot-0`). The session is read-only: panning, speed, pause, focus, info, status, help, theme and quit work. |
 | `--simulate` | Run a bot-only match headless (no TUI) and print the progress and result |
 | `--max-ticks N` | With `--simulate`, give up after N ticks (10 ticks = 1 s). The default is the timer plus 2 minutes, or 60 minutes when there is no timer. |
 | `--version`, `--help` | Version and help |
@@ -81,11 +82,21 @@ Exit codes:
 
 ## How to play
 
-Everything happens at the always-on prompt at the bottom of the screen. Start
-typing; there is no mode to switch into. The hint strip above the prompt shows
-what the line will do before you press Enter, for example
-`ATTACK Brazil (garrison 120) send 4,200 troops, ETA 8s`. Invalid commands stay
-on the line with the reason, so you can fix them.
+The game is hotkey-first. A crosshair (`✛`, or `+` in ASCII mode) marks the
+center of the map, and the region under it is selected and pulses. Move it with
+the arrow keys or jump with Tab, then press a key: `a` attacks the selected
+region with the amount shown in the status bar (`Send 40%`, set with `1`-`9`
+for 10%-90% and `0` for 100%). Hotkeys act at once, with no confirmation. The
+hint strip above the bottom row always previews the selection, for example
+`Brazil [br]  Bot-3  garrison 120  value 9   a send 4,200 (40%), ETA 8s  captures (defense 132)`,
+or the reason `a` would fail. A rejected hotkey queues nothing and shows why.
+
+Press `:` (or Enter) to open the command line for everything else. Typed
+commands work as before: the hint strip shows what the line will do before you
+press Enter, invalid commands stay on the line with the reason, and a
+successful command returns you to hotkeys. Esc clears the line, and Esc on an
+empty line returns to hotkeys. The bottom row always shows which mode you are
+in: a dim key cheat sheet in hotkey mode, the `> ` prompt in command mode.
 
 - Your **pool** grows over time. Growth depends on the value of the land you
   own, and it slows as the pool nears its cap.
@@ -99,7 +110,40 @@ on the line with the reason, so you can fix them.
   **elimination** (last player or alliance standing), or the highest **score**
   when the timer runs out.
 
+### Hotkeys
+
+| Key | Action |
+| --- | --- |
+| Arrows | Move the map and the crosshair. Shift or Ctrl + arrow moves 4x faster. |
+| `+` / `-` | Zoom in or out through seven levels (`=` and `_` work too) |
+| Tab / Shift+Tab | Jump to the next / previous region you can attack, nearest to your capital first |
+| `o` / `O` | Jump to the next / previous region you own, most valuable first |
+| `c` | Jump to your capital |
+| `a` | Attack the selected region with the current amount |
+| `f` / `r` | Fortify / recall the selected region with the current amount |
+| `w` / `e` | Attack `@weakest` / `@richest` with the current amount, and jump there |
+| `1`-`9`, `0` | Set the amount to 10%-90%, or 100%. It lasts for the match and starts at your enemy default rounded to 10. |
+| `l` / `u` | Propose or accept an alliance with / break the alliance with the selected region's owner |
+| `y` | Accept the newest alliance offer made to you |
+| `i` / `s` | Info panel for the selected region / your status |
+| `p` or Space | Pause or resume |
+| `[` / `]` | Slower / faster (0.25x, 0.5x, 1x, 2x, 4x, 8x) |
+| `t` | Next color theme (saved in the settings) |
+| `.` | Repeat the last hotkey action (same target) or the last command line |
+| `?` or `h` | Help. Up/Down and PageUp/PageDown scroll it, Esc closes it. |
+| PageUp / PageDown | Scroll the event log |
+| Esc | Close the panel or clear an error |
+| `:` or Enter | Open the command line |
+| Ctrl+C | Quit immediately |
+
+When the crosshair is over the ocean, the nearest region label close to it is
+selected. In a replay or while spectating, the action keys (`a f r w e l u y`)
+are refused; moving, zooming, pause, speed, info, status, help, theme and `:`
+(for view commands such as `:q`) still work.
+
 ### Command cheat sheet
+
+Type these after pressing `:`.
 
 | Verb | Short | Example | Effect |
 | --- | --- | --- | --- |
@@ -154,22 +198,31 @@ Players are named by name (`bot-3`), unique prefix or number (`3`).
 - Quote a body that contains `;`, as in `alias go "a @weakest 30%; f es 10%"`.
 - Aliases are saved in the settings.
 
-### Keys
+### Command line keys
+
+These apply after `:` opens the command line.
 
 | Key | Action |
 | --- | --- |
-| Enter / Esc | Submit / clear the line |
-| Tab | Accept the dimmed completion. With an empty prompt, cycle the camera through your regions (Shift+Tab goes backwards). |
+| Enter | Run the line and return to hotkeys. A rejected line stays, with the reason. An empty line returns to hotkeys. |
+| Esc | Clear the line. On an empty line, return to hotkeys. |
+| Tab | Accept the dimmed completion |
 | Up / Down | Command history |
-| Left, Right, Home, End, Backspace, Delete | Edit the line. With an empty prompt, Left and Right pan the map. |
+| Left, Right, Home, End, Backspace, Delete | Edit the line. With an empty line, Left and Right pan the map. |
 | Ctrl+U / Ctrl+W / Ctrl+A / Ctrl+E | Clear the line / delete a word / go to the start / go to the end |
 | Shift or Ctrl + arrows | Pan the map |
-| `+` / `-` | Zoom in or out through seven levels (only when the prompt is empty, because region codes contain `-`) |
+| `+` / `-` | Zoom in or out, only when the line is empty (region codes contain `-`) |
 | PageUp / PageDown | Scroll the event log or the help page |
-| Ctrl+C | Quit immediately |
 
 Characters typed with AltGr (such as `@` on many European keyboard layouts on
-Windows, which reports AltGr as Ctrl+Alt) go into the prompt as usual.
+Windows, which reports AltGr as Ctrl+Alt) go into the prompt as usual, and
+AltGr hotkeys such as `[` and `]` work too.
+
+On the start-region picker (setup option to choose your start), move the
+crosshair with the arrows, zoom with `+`/`-`, and press Tab to jump through
+regions by value. Enter starts in the region under the crosshair. `:` opens a
+prompt to type a region name instead (Esc returns to the crosshair), and Esc
+goes back to setup.
 
 On the setup screen:
 

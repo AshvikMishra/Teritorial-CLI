@@ -1,5 +1,6 @@
-//! Help text: the command overview, per-verb help with examples (PRD 5.2) and
-//! topic pages for smart targets, amounts, chaining and view keys.
+//! Help text: the overview (hotkeys first, then the typed commands), per-verb
+//! help with examples (PRD 5.2) and topic pages for smart targets, amounts,
+//! chaining and keys.
 //!
 //! Every function returns plain lines (no styling) so the app can render them
 //! in a popup or the event log.
@@ -149,7 +150,7 @@ fn doc(v: Verb) -> VerbDoc {
             examples: &[
                 ("h attack", "help for attack"),
                 ("h targets", "smart targets and region names"),
-                ("h keys", "view keys"),
+                ("h keys", "every hotkey"),
             ],
         },
         Verb::Save => VerbDoc {
@@ -245,12 +246,27 @@ pub fn topic_key(word: &str) -> Option<&'static str> {
 
 /// The command overview shown by plain `help`.
 pub fn overview() -> Vec<String> {
-    let mut out = vec![
-        "COMMAND REFERENCE".to_string(),
-        "  Type the example command, then press Enter.".to_string(),
-        "  Full names and shortcuts both work.".to_string(),
-        String::new(),
-    ];
+    let mut out: Vec<String> = [
+        "HELP",
+        "  Hotkeys act at once on the region under the",
+        "  crosshair in the middle of the map.",
+        "  Press : to type a command; Esc returns to hotkeys.",
+        "",
+        "HOTKEYS",
+        "  arrows move the crosshair   + - zoom",
+        "  Tab next target   o your regions   c capital",
+        "  a attack   f fortify   r recall   1-0 amount",
+        "  w weakest   e richest   . repeat   p pause",
+        "  help keys lists every key.",
+        "",
+        "COMMAND REFERENCE",
+        "  Press :, type the example command, then Enter.",
+        "  Full names and shortcuts both work.",
+        "",
+    ]
+    .iter()
+    .map(|s| (*s).to_string())
+    .collect();
     for v in Verb::ALL.iter().copied() {
         let heading = match v.short() {
             Some(short) => format!("{} (shortcut: {})", v.name().to_uppercase(), short),
@@ -278,7 +294,7 @@ pub fn overview() -> Vec<String> {
         "  help targets  Region names and smart targets",
         "  help amounts  Troop amounts and percentages",
         "  help chain    Chaining and repeating commands",
-        "  help keys     Keyboard controls",
+        "  help keys     Every hotkey",
     ].iter().map(|s| (*s).to_string()));
     wrap_help(out)
 
@@ -341,14 +357,30 @@ const CHAIN_PAGE: &[&str] = &[
 ];
 
 const KEYS_PAGE: &[&str] = &[
-    "VIEW KEYS (these never affect gameplay)",
-    "  Shift/Ctrl + arrows   pan the map",
-    "  + and -               zoom in and out (only when the prompt is empty)",
-    "  Tab                   accept the dimmed completion; with an empty prompt, cycle the camera through your regions",
-    "  Up / Down             command history",
-    "  Left/Right/Home/End   move the cursor; Backspace/Delete edit",
-    "  PgUp / PgDn           scroll the event log",
-    "  Esc                   clear the command line",
+    "KEYS  hotkeys act at once on the region under the crosshair",
+    "  Arrows            move the map and the crosshair (Shift/Ctrl: 4x faster)",
+    "  + / -             zoom in / out (= and _ work too)",
+    "  Tab / Shift+Tab   jump to the next / previous region you can attack, nearest first",
+    "  o / O             jump to the next / previous region you own, richest first",
+    "  c                 jump to your capital",
+    "  a                 attack the selected region with the current amount",
+    "  f / r             fortify / recall the selected region with the current amount",
+    "  w / e             attack @weakest / @richest and jump there",
+    "  1 .. 9, 0         set the amount to 10% .. 90%; 0 is 100%",
+    "  l / u             ally with / break with the owner of the selected region",
+    "  y                 accept the newest alliance offer",
+    "  i / s             region info / your status",
+    "  p or Space        pause or resume;  [ and ] slow down / speed up",
+    "  t                 next color theme",
+    "  .                 repeat the last hotkey action or command line",
+    "  ? or h            this help;  PgUp / PgDn scroll the event log or the help",
+    "  Esc               close help and panels, clear an error",
+    "  : or Enter        open the command line for typed commands",
+    "Command line (after :):",
+    "  Enter runs the line and returns to hotkeys; Esc clears it, then returns.",
+    "  Tab or Right accepts the dimmed completion; Up / Down browse history.",
+    "  Left/Right/Home/End move the cursor; Ctrl+U clears, Ctrl+W deletes a word.",
+    "  Ctrl+C quits at once.",
 ];
 
 /// The page for a non-verb topic from [`TOPICS`], or `None` if unknown.
@@ -394,7 +426,8 @@ pub fn before_play() -> Vec<String> {
     let mut lines: Vec<String> = [
         "HOW TO PLAY",
         "  Grow your troop pool, capture neighboring regions and defend your land.",
-        "  Commands are typed at the bottom of the screen; Enter submits them.",
+        "  Hotkeys act on the region under the map crosshair.",
+        "  Press : to type a command instead; Enter runs it.",
         "",
         "WIN CONDITIONS",
         "  Domination: reach the chosen share of world value. No timer or allied win.",
@@ -402,12 +435,14 @@ pub fn before_play() -> Vec<String> {
         "  Timed: have the highest score when the time limit expires.",
         "",
         "YOUR FIRST MOVES",
-        "  i             Inspect your capital and its neighbors.",
-        "  a fr 40%      Attack France with 40% of your pool, if it borders you.",
-        "  a @weakest 25%  Attack your weakest bordering enemy, or a neutral.",
-        "  f fr 200      Fortify France with 200 pool troops, if you own it.",
-        "  r fr 100      Recall 100 garrison troops to your pool, if you own it.",
+        "  Tab           Jump to the nearest region you can attack.",
+        "  4             Set the amount to 40% of your pool (0 = 100%).",
+        "  a             Attack the region under the crosshair.",
+        "  w             Attack your weakest bordering enemy, or a neutral.",
+        "  c, then f     Fortify your capital with the current amount.",
+        "  i             Inspect the selected region and its neighbors.",
         "  p             Pause or resume while you plan your next move.",
+        "  :a fr 40%     Or type a command: attack France with 40%.",
         "",
         "ATTACK BASICS",
         "  Targets must share a land border or sea lane with your territory.",

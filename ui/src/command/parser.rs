@@ -721,28 +721,8 @@ fn parse_garrison(
     } else {
         0
     };
-    let name = ctx.game.map().region(region).name.clone();
-    let g = pv.target_garrison;
-    let hint = if verb == Verb::Fortify {
-        format!(
-            "FORTIFY  {} (garrison {})  +{} troops from pool{} -> {}, fortified for {}",
-            name,
-            fmt_num(g),
-            fmt_num(spend),
-            amount_note(amount),
-            fmt_num(g.saturating_add(spend)),
-            fmt_ticks(ctx.game.balance().fortify_duration_ticks)
-        )
-    } else {
-        format!(
-            "RECALL  {} (garrison {})  pull {} troops{} back to pool in {}",
-            name,
-            fmt_num(g),
-            fmt_num(pv.troops),
-            amount_note(amount),
-            fmt_ticks(ctx.game.balance().recall_delay_ticks)
-        )
-    };
+    let moved = if verb == Verb::Fortify { spend } else { pv.troops };
+    let hint = garrison_hint(ctx, verb, region, pv.target_garrison, moved, amount);
     Ok((
         ParsedCommand {
             action: Action::Game(cmd),
@@ -750,6 +730,38 @@ fn parse_garrison(
         },
         spend,
     ))
+}
+
+/// The hint for a fortify or recall of `troops` on `region` (garrison `g`).
+fn garrison_hint(
+    ctx: &CommandContext<'_>,
+    verb: Verb,
+    region: RegionId,
+    g: i64,
+    troops: i64,
+    amount: Amount,
+) -> String {
+    let name = ctx.game.map().region(region).name.clone();
+    if verb == Verb::Fortify {
+        format!(
+            "FORTIFY  {} (garrison {})  +{} troops from pool{} -> {}, fortified for {}",
+            name,
+            fmt_num(g),
+            fmt_num(troops),
+            amount_note(amount),
+            fmt_num(g.saturating_add(troops)),
+            fmt_ticks(ctx.game.balance().fortify_duration_ticks)
+        )
+    } else {
+        format!(
+            "RECALL  {} (garrison {})  pull {} troops{} back to pool in {}",
+            name,
+            fmt_num(g),
+            fmt_num(troops),
+            amount_note(amount),
+            fmt_ticks(ctx.game.balance().recall_delay_ticks)
+        )
+    }
 }
 
 fn parse_diplomacy(
@@ -774,8 +786,16 @@ fn parse_diplomacy(
     ctx.game
         .preview(ctx.player, &cmd)
         .map_err(|e| e.to_string())?;
+    Ok(ParsedCommand {
+        action: Action::Game(cmd),
+        hint: diplomacy_hint(ctx, verb, p),
+    })
+}
+
+/// The hint for `ally` or `unally` with player `p`.
+fn diplomacy_hint(ctx: &CommandContext<'_>, verb: Verb, p: PlayerId) -> String {
     let name = player_name(ctx.game, p);
-    let hint = if verb == Verb::Ally {
+    if verb == Verb::Ally {
         if ctx.game.pending_proposal(p, ctx.player) {
             format!("ALLY  {}  accept their alliance proposal", name)
         } else {
@@ -787,6 +807,34 @@ fn parse_diplomacy(
             name,
             fmt_ticks(ctx.game.balance().truce_ticks)
         )
+    }
+}
+
+/// Validates a ready-made game command (built by a hotkey instead of typed)
+/// with `Game::preview` and describes it with the same hint the typed form
+/// gets, so hotkeys and typed commands share one validation path. `smart` is
+/// the smart-target label shown for an attack (`@weakest`).
+pub fn describe_command(
+    cmd: Command,
+    smart: Option<&str>,
+    ctx: &CommandContext<'_>,
+) -> Result<ParsedCommand, String> {
+    let pv = ctx
+        .game
+        .preview(ctx.player, &cmd)
+        .map_err(|e| e.to_string())?;
+    let hint = match cmd {
+        Command::Attack { target, amount } => {
+            attack_hint(ctx, target, smart, &pv, pv.troops, amount)
+        }
+        Command::Fortify { region, amount } => {
+            garrison_hint(ctx, Verb::Fortify, region, pv.target_garrison, pv.troops, amount)
+        }
+        Command::Recall { region, amount } => {
+            garrison_hint(ctx, Verb::Recall, region, pv.target_garrison, pv.troops, amount)
+        }
+        Command::ProposeAlliance { with } => diplomacy_hint(ctx, Verb::Ally, with),
+        Command::BreakAlliance { with } => diplomacy_hint(ctx, Verb::Unally, with),
     };
     Ok(ParsedCommand {
         action: Action::Game(cmd),

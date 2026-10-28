@@ -1,5 +1,6 @@
 //! Drawing: one function per screen plus the shared pieces (status bar,
-//! leaderboard, event log, hint strip, prompt, panels and overlays).
+//! leaderboard, event log, hint strip, prompt or hotkey strip, panels and
+//! overlays).
 //!
 //! Colors always come from the active [`Theme`], quantized for the terminal's
 //! color mode. In ASCII glyph mode every border uses plain `+`, `-` and `|`.
@@ -12,7 +13,9 @@ use ratatui::symbols::border;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
-use territorial_core::{EdgeKind, Game, Outcome, PlayerId, RegionId, HUMAN, TICKS_PER_SECOND};
+use territorial_core::{
+    Amount, Command, EdgeKind, Game, Outcome, PlayerId, RegionId, HUMAN, TICKS_PER_SECOND,
+};
 use territorial_render::{
     art, compact_number, Capabilities, ColorMode, GlyphMode, MapRenderCtx, Rgb, Theme,
 };
@@ -30,6 +33,39 @@ const MIN_H: u16 = 20;
 /// Below this size the playing screen switches to compact mode.
 const COMPACT_W: u16 = 100;
 const COMPACT_H: u16 = 30;
+
+/// The hotkey cheat strip while playing: (key, rest of the label).
+const PLAY_KEYS: &[(&str, &str)] = &[
+    ("[a]", "ttack"),
+    ("[f]", "ortify"),
+    ("[r]", "ecall"),
+    ("[w]", "eakest"),
+    ("[e]", "richest"),
+    ("1-0", " amount"),
+    ("Tab", " target"),
+    (":", " command"),
+    ("?", " help"),
+];
+/// The hotkey cheat strip in a read-only session (replay or spectating).
+const WATCH_KEYS: &[(&str, &str)] = &[
+    ("arrows", " pan"),
+    ("+/-", " zoom"),
+    ("i", " info"),
+    ("s", " status"),
+    ("p", " pause"),
+    ("[ ]", " speed"),
+    (":", " command"),
+    ("?", " help"),
+];
+/// The hotkey cheat strip on the start picker.
+const CHOOSE_KEYS: &[(&str, &str)] = &[
+    ("arrows", " move"),
+    ("+/-", " zoom"),
+    ("Tab", " rich regions"),
+    ("Enter", " start here"),
+    (":", " type a name"),
+    ("Esc", " back"),
+];
 
 /// Plain ASCII borders for terminals without Unicode.
 const ASCII_BORDER: border::Set = border::Set {
@@ -449,15 +485,24 @@ fn draw_choose(app: &mut App, f: &mut Frame, area: Rect, pal: &Pal) {
         viewer: HUMAN,
         highlight: choose.resolved,
         anim_frame: app.anim_frame,
+        crosshair: !app.prompt_open,
     };
     app.renderer.render(&ctx, chunks[1], f.buffer_mut());
 
+    // In hotkey mode only the region under the crosshair counts; the typed
+    // prompt falls back to the preview's start for an empty line.
     let shown: Option<RegionId> = match choose.resolved {
         Some(r) => Some(r),
-        None => choose.preview.get_player(HUMAN).and_then(|p| p.capital),
+        None if app.prompt_open => choose.preview.get_player(HUMAN).and_then(|p| p.capital),
+        None => None,
     };
     let hint = if let Some(e) = &choose.error {
         Line::from(Span::styled(format!("! {}", e), pal.fg(pal.bad)))
+    } else if !app.prompt_open && shown.is_none() {
+        Line::from(Span::styled(
+            "Move the crosshair onto a region (arrows, Tab), or press : to type a name.",
+            pal.fg(pal.dim),
+        ))
     } else {
         match shown {
             Some(r) => {
@@ -468,6 +513,11 @@ fn draw_choose(app: &mut App, f: &mut Frame, area: Rect, pal: &Pal) {
                 } else {
                     "Enter with an empty line starts in "
                 };
+                let keys = if app.prompt_open {
+                    "Enter confirms, Esc clears the line."
+                } else {
+                    "Enter starts here, Esc goes back."
+                };
                 Line::from(vec![
                     Span::styled(lead, pal.fg(pal.dim)),
                     Span::styled(
@@ -476,10 +526,11 @@ fn draw_choose(app: &mut App, f: &mut Frame, area: Rect, pal: &Pal) {
                     ),
                     Span::styled(
                         format!(
-                            " - {}, value {}, {} neighbors.  Enter confirms, Esc goes back.",
+                            " - {}, value {}, {} neighbors.  {}",
                             info.continent,
                             info.value,
-                            map.neighbors(r).len()
+                            map.neighbors(r).len(),
+                            keys
                         ),
                         pal.fg(pal.dim),
                     ),
@@ -492,14 +543,18 @@ fn draw_choose(app: &mut App, f: &mut Frame, area: Rect, pal: &Pal) {
         }
     };
     f.render_widget(Paragraph::new(hint), chunks[2]);
-    draw_prompt(
-        f,
-        chunks[3],
-        &app.prompt,
-        "",
-        "type a region to start (name or code)",
-        pal,
-    );
+    if app.prompt_open {
+        draw_prompt(
+            f,
+            chunks[3],
+            &app.prompt,
+            "",
+            "type a region to start (name or code), Esc returns to the crosshair",
+            pal,
+        );
+    } else {
+        draw_key_strip(f, chunks[3], CHOOSE_KEYS, pal);
+    }
 }
 
 // ----------------------------------------------------------------------
@@ -513,8 +568,12 @@ fn map_highlight(app: &App, now: Instant) -> Option<RegionId> {
             return Some(r);
         }
     }
-    if app.prompt_target.is_some() {
-        return app.prompt_target;
+    if app.prompt_open {
+        if app.prompt_target.is_some() {
+            return app.prompt_target;
+        }
+    } else if let Some(r) = app.selected_region() {
+        return Some(r);
     }
     match &app.panel {
         Some(Panel::Region(r)) => Some(*r),
@@ -560,6 +619,7 @@ fn draw_playing(app: &mut App, f: &mut Frame, area: Rect, pal: &Pal, now: Instan
             viewer: HUMAN,
             highlight,
             anim_frame: app.anim_frame,
+            crosshair: !app.prompt_open,
         };
         app.renderer.render(&ctx, map_area, f.buffer_mut());
     }
@@ -589,26 +649,36 @@ fn draw_playing(app: &mut App, f: &mut Frame, area: Rect, pal: &Pal, now: Instan
 
     if let Some(log_rect) = log_area {
         draw_log(app, f, log_rect, pal, now);
-        draw_hint(app, session, f, hint_area, pal);
-    } else if !app.prompt.is_empty() || app.submit_error.is_some() {
-        draw_hint(app, session, f, hint_area, pal);
-    } else {
-        draw_last_log_line(app, f, hint_area, pal, now);
     }
-
-    let placeholder = if session.read_only() {
-        "read-only: speed, pause, focus, info, status, help, quit"
+    if app.prompt_open {
+        if log_area.is_some() || !app.prompt.is_empty() || app.submit_error.is_some() {
+            draw_hint(app, session, f, hint_area, pal);
+        } else {
+            draw_last_log_line(app, f, hint_area, pal, now);
+        }
+        let placeholder = if session.read_only() {
+            "read-only: speed, pause, focus, info, status, help, quit   (Esc: hotkeys)"
+        } else {
+            "type a command, e.g. a <region> 30%   (Esc: back to hotkeys)"
+        };
+        draw_prompt(
+            f,
+            prompt_area,
+            &app.prompt,
+            &app.analysis.ghost,
+            placeholder,
+            pal,
+        );
     } else {
-        "type a command, e.g. a <region> 30%   (help: h)"
-    };
-    draw_prompt(
-        f,
-        prompt_area,
-        &app.prompt,
-        &app.analysis.ghost,
-        placeholder,
-        pal,
-    );
+        let selected = app.selected_region();
+        if log_area.is_none() && app.submit_error.is_none() && selected.is_none() {
+            draw_last_log_line(app, f, hint_area, pal, now);
+        } else {
+            draw_selection_hint(app, session, game, selected, f, hint_area, pal);
+        }
+        let keys = if session.read_only() { WATCH_KEYS } else { PLAY_KEYS };
+        draw_key_strip(f, prompt_area, keys, pal);
+    }
 
     draw_help(app, f, map_area, pal);
 }
@@ -662,6 +732,13 @@ fn draw_status(
         spans.push(Span::styled(format!("{}%", game.land_pct(HUMAN)), value));
         spans.push(Span::styled(if compact { "  R " } else { "  Regions " }, label));
         spans.push(Span::styled(game.region_count(HUMAN).to_string(), value));
+        if !session.read_only() {
+            spans.push(Span::styled("  Send ", label));
+            spans.push(Span::styled(
+                format!("{}%", app.send_pct),
+                pal.fg(pal.accent).add_modifier(Modifier::BOLD),
+            ));
+        }
     } else {
         spans.push(Span::styled(
             "  ELIMINATED",
@@ -1136,6 +1213,129 @@ fn draw_hint(app: &App, session: &Session, f: &mut Frame, area: Rect, pal: &Pal)
         }
     }
     f.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+/// The hint strip in hotkey mode: the last hotkey's error, or a live preview
+/// of the selected region (the one under the crosshair) and what its hotkeys
+/// would do with the current amount.
+fn draw_selection_hint(
+    app: &App,
+    session: &Session,
+    game: &Game,
+    selected: Option<RegionId>,
+    f: &mut Frame,
+    area: Rect,
+    pal: &Pal,
+) {
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    if let Some(err) = &app.submit_error {
+        spans.push(Span::styled(
+            format!("! {}", err),
+            pal.fg(pal.bad).add_modifier(Modifier::BOLD),
+        ));
+    } else if let Some(r) = selected {
+        let info = game.map().region(r);
+        let st = game.region_state(r);
+        spans.push(Span::styled(
+            info.name.clone(),
+            pal.fg(pal.accent).add_modifier(Modifier::BOLD),
+        ));
+        spans.push(Span::styled(format!(" [{}]  ", info.code), pal.fg(pal.dim)));
+        spans.push(owner_span(app, game, st.owner, pal));
+        spans.push(Span::styled(
+            format!("  garrison {}  value {}", fmt_num(st.garrison), info.value),
+            pal.fg(pal.text),
+        ));
+        if !session.read_only() {
+            spans.push(Span::styled("   ", pal.fg(pal.dim)));
+            spans.extend(selection_action_spans(game, r, app.send_pct, pal));
+        }
+    } else {
+        spans.push(Span::styled(
+            "No region under the crosshair. Arrows move it, Tab jumps to a target, : types a command.",
+            pal.fg(pal.dim),
+        ));
+    }
+    f.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+/// What the hotkeys would do to region `r` with `pct` percent, from
+/// `Game::preview`: `a` (troops, ETA, capture verdict, or why it cannot)
+/// for other regions, `f` and `r` for your own.
+fn selection_action_spans(game: &Game, r: RegionId, pct: u8, pal: &Pal) -> Vec<Span<'static>> {
+    let amount = Amount::Percent(pct);
+    let key = pal.fg(pal.accent).add_modifier(Modifier::BOLD);
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    if game.region_state(r).owner == Some(HUMAN) {
+        spans.push(Span::styled("f", key));
+        match game.preview(HUMAN, &Command::Fortify { region: r, amount }) {
+            Ok(pv) => spans.push(Span::styled(
+                format!(" +{} troops  ", fmt_num(pv.troops)),
+                pal.fg(pal.text),
+            )),
+            Err(e) => spans.push(Span::styled(format!(" {}  ", e), pal.fg(pal.bad))),
+        }
+        spans.push(Span::styled("r", key));
+        match game.preview(HUMAN, &Command::Recall { region: r, amount }) {
+            Ok(pv) => spans.push(Span::styled(
+                format!(" -{} troops", fmt_num(pv.troops)),
+                pal.fg(pal.text),
+            )),
+            Err(e) => spans.push(Span::styled(format!(" {}", e), pal.fg(pal.bad))),
+        }
+        return spans;
+    }
+    spans.push(Span::styled("a", key));
+    match game.preview(HUMAN, &Command::Attack { target: r, amount }) {
+        Ok(pv) => {
+            let eta = match pv.eta_ticks {
+                Some(t) => format!(", ETA {}", fmt_ticks(t)),
+                None => String::new(),
+            };
+            let en_route: i64 = game
+                .marches_to(r)
+                .iter()
+                .filter(|m| m.owner == HUMAN)
+                .map(|m| m.troops)
+                .sum();
+            let mut text = format!(" send {} ({}%){}", fmt_num(pv.troops), pct, eta);
+            if en_route > 0 {
+                text.push_str(&format!(", +{} en route", fmt_num(en_route)));
+            }
+            spans.push(Span::styled(text, pal.fg(pal.text)));
+            if pv.troops.saturating_add(en_route) > pv.defense_needed {
+                spans.push(Span::styled(
+                    format!("  captures (defense {})", fmt_num(pv.defense_needed)),
+                    pal.fg(pal.good).add_modifier(Modifier::BOLD),
+                ));
+            } else {
+                spans.push(Span::styled(
+                    format!("  too few (defense {})", fmt_num(pv.defense_needed)),
+                    pal.fg(pal.warn),
+                ));
+            }
+        }
+        Err(e) => spans.push(Span::styled(format!(" {}", e), pal.fg(pal.bad))),
+    }
+    spans
+}
+
+/// The prompt row in hotkey mode: a one-line cheat sheet of the keys (it
+/// replaces the `> ` prompt, so the mode is always visible).
+fn draw_key_strip(f: &mut Frame, area: Rect, keys: &[(&str, &str)], pal: &Pal) {
+    if area.height == 0 {
+        return;
+    }
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    for (i, (key, rest)) in keys.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::styled("  ", pal.fg(pal.dim)));
+        }
+        spans.push(Span::styled(key.to_string(), pal.fg(pal.accent)));
+        spans.push(Span::styled(rest.to_string(), pal.fg(pal.dim)));
+    }
+    let line_area = Rect::new(area.x, area.y, area.width, 1);
+    f.render_widget(Paragraph::new(Line::from(spans)), line_area);
 }
 
 /// Draws the `> ` prompt with the cursor, dim ghost text (only when the

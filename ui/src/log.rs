@@ -426,8 +426,10 @@ pub fn describe_event(game: &Game, ev: &GameEvent, viewer: PlayerId) -> Option<(
                 let name = player_name(game, *from);
                 let line = Msg::new()
                     .player(game, *from)
-                    .push(" proposes an alliance - type ", Tone::Accent)
-                    .push(&format!("ally {}", name.to_lowercase()), Tone::Good)
+                    .push(" proposes an alliance - press ", Tone::Accent)
+                    .push("y", Tone::Good)
+                    .push(" or type ", Tone::Accent)
+                    .push(&format!(":ally {}", name.to_lowercase()), Tone::Good)
                     .push(" to accept", Tone::Accent);
                 Some((line, true, true))
             } else if *from == me {

@@ -5,7 +5,15 @@
 //! advance the simulation with a fixed 10 Hz tick scaled by the speed setting
 //! (an `Instant` accumulator), and redraw only when something changed or an
 //! animation is running, at most ~60 frames per second.
+//!
+//! Input while playing has two modes. Hotkey mode (the default) acts at once
+//! on the region under the map crosshair (the camera center): `a` attacks it,
+//! `Tab` jumps to targets, `1`..`0` set the amount, and so on. `:` or Enter
+//! opens prompt mode, the typed command line, which returns to hotkey mode
+//! after a successful command or on Esc with an empty line. Hotkey game
+//! commands go through the same validation and queue path as typed ones.
 
+use std::cmp::Reverse;
 use std::io;
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::sync::Arc;
@@ -15,13 +23,13 @@ use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModif
 use ratatui::DefaultTerminal;
 use territorial_core::config::DEFAULT_SEED;
 use territorial_core::{
-    Balance, EventKind, Game, GameEvent, MatchConfig, Replay, ReplayPlayer, RegionId, StartChoice,
-    WorldMap, HUMAN, TICKS_PER_SECOND,
+    resolve_target, Amount, Balance, Command, EventKind, Game, GameEvent, MatchConfig, Replay,
+    ReplayPlayer, RegionId, SmartTarget, StartChoice, WorldMap, HUMAN, TICKS_PER_SECOND,
 };
-use territorial_render::{Camera, Capabilities, MapRenderer, Theme, ThemeKind};
+use territorial_render::{Camera, Capabilities, MapRenderer, Theme, ThemeKind, ZoomLevel};
 
 use crate::command::fuzzy::{self, Relevance};
-use crate::command::parser::{fmt_speed, SPEED_MAX_PCT, SPEED_MIN_PCT};
+use crate::command::parser::{describe_command, fmt_speed, SPEED_MAX_PCT, SPEED_MIN_PCT};
 use crate::command::{self, help, Action, Analysis, CommandContext, History, SubmitResult};
 use crate::log::{self, EventLog, Msg, Tone};
 use crate::prompt::Prompt;
@@ -50,6 +58,13 @@ const FOCUS_FLASH: Duration = Duration::from_millis(1600);
 const IDLE_WAIT: Duration = Duration::from_millis(500);
 /// Quick-save name.
 const QUICK_SAVE: &str = "quicksave";
+/// The game speeds `[` and `]` step through, in percent.
+const SPEED_STEPS: [u32; 6] = [25, 50, 100, 200, 400, 800];
+/// One arrow-key pan in screen cells (horizontal, vertical). Shift or Ctrl pans 4x.
+const PAN_STEP: (i32, i32) = (8, 3);
+/// Over the ocean the crosshair selects the region whose label is nearest
+/// within this many screen pixels (at least this many raster cells).
+const SNAP_RADIUS_PX: f32 = 6.0;
 
 /// Which screen is showing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -149,6 +164,15 @@ impl Session {
     }
 }
 
+/// What `.` repeats.
+#[derive(Clone, Debug)]
+enum Repeat {
+    /// A hotkey game command, with the target it had.
+    Command(Command),
+    /// A command line submitted at the prompt (`!!` expanded).
+    Line(String),
+}
+
 /// The start-region picker state.
 pub struct ChooseState {
     pub config: MatchConfig,
@@ -178,6 +202,8 @@ pub struct App {
     pub session: Option<Session>,
     pub choose: Option<ChooseState>,
     pub prompt: Prompt,
+    /// Prompt mode (the typed command line) instead of hotkey mode.
+    pub prompt_open: bool,
     pub history: History,
     pub analysis: Analysis,
     pub prompt_target: Option<RegionId>,
@@ -187,12 +213,18 @@ pub struct App {
     pub help: Option<HelpOverlay>,
     pub speed_pct: u32,
     pub paused: bool,
+    /// The amount hotkey attack, fortify and recall send, in percent (10..=100).
+    pub send_pct: u8,
     acc_us: u64,
     last_update: Instant,
     pub anim_frame: u32,
     last_anim: Instant,
     anim_active: bool,
-    tab_index: usize,
+    /// Where the Tab cycle (targets, or start regions) last stopped: region and index.
+    tab_cycle: Option<(RegionId, usize)>,
+    /// Where the `o` cycle through owned regions last stopped.
+    own_cycle: Option<(RegionId, usize)>,
+    last_action: Option<Repeat>,
     pub focus_flash: Option<(RegionId, Instant)>,
     dirty: bool,
     quit: bool,
@@ -213,6 +245,99 @@ fn make_ctx<'a>(game: &'a Game, settings: &'a Settings, history: &'a History) ->
     ctx.default_attack_pct_enemy = settings.default_attack_pct_enemy.clamp(1, 100);
     ctx.last_line = history.last();
     ctx
+}
+
+/// The amount hotkeys start a match with: the enemy default attack percent
+/// rounded to the nearest 10 (10..=100).
+fn initial_send_pct(settings: &Settings) -> u8 {
+    let p = settings.default_attack_pct_enemy.clamp(1, 100);
+    ((p + 5) / 10 * 10).clamp(10, 100)
+}
+
+/// Why `what` (a verb) is refused in a read-only session.
+fn read_only_error(what: &str) -> String {
+    format!(
+        "read-only: {} is not available (speed, pause, focus, info, status, help, theme, quit)",
+        what
+    )
+}
+
+/// The region under the camera center (the crosshair). Over the ocean it is
+/// the region whose label is nearest within [`SNAP_RADIUS_PX`] screen pixels
+/// (the short way around the world), or `None`.
+fn crosshair_region(map: &WorldMap, camera: &Camera) -> Option<RegionId> {
+    let raster = &map.raster;
+    let x = camera.cx.floor() as i32;
+    let y = (camera.cy.floor() as i32).min(i32::from(raster.height) - 1);
+    if let Some(r) = raster.region_at(x, y) {
+        return Some(r);
+    }
+    let radius = SNAP_RADIUS_PX * camera.pixel_scale().max(1.0);
+    let w = camera.world_w.max(1.0);
+    let mut best: Option<(f32, RegionId)> = None;
+    for info in &map.regions {
+        let mut dx = (f32::from(info.label.0) + 0.5 - camera.cx).abs() % w;
+        if dx > w / 2.0 {
+            dx = w - dx;
+        }
+        let dy = f32::from(info.label.1) + 0.5 - camera.cy;
+        let d = (dx * dx + dy * dy).sqrt();
+        let closer = match best {
+            Some((bd, _)) => d < bd,
+            None => true,
+        };
+        if d <= radius && closer {
+            best = Some((d, info.id));
+        }
+    }
+    best.map(|(_, r)| r)
+}
+
+/// Squared distance between the labels of `a` and `b` in raster cells, the
+/// short way around the world.
+fn label_dist2(map: &WorldMap, a: RegionId, b: RegionId) -> i64 {
+    let (pa, pb) = match (map.get_region(a), map.get_region(b)) {
+        (Some(x), Some(y)) => (x.label, y.label),
+        _ => return i64::MAX,
+    };
+    let w = i64::from(map.raster.width.max(1));
+    let mut dx = (i64::from(pa.0) - i64::from(pb.0)).abs() % w;
+    if dx > w / 2 {
+        dx = w - dx;
+    }
+    let dy = i64::from(pa.1) - i64::from(pb.1);
+    dx * dx + dy * dy
+}
+
+/// The next (or previous) entry of a cycle through `list` after the one in
+/// `memo`, which is updated. When the remembered region left the list, the
+/// cycle goes on from the same position.
+fn cycle_step(
+    list: &[RegionId],
+    memo: &mut Option<(RegionId, usize)>,
+    forward: bool,
+) -> Option<RegionId> {
+    let n = list.len();
+    if n == 0 {
+        return None;
+    }
+    let idx = match *memo {
+        None => {
+            if forward {
+                0
+            } else {
+                n - 1
+            }
+        }
+        Some((last, i)) => match list.iter().position(|&r| r == last) {
+            Some(p) if forward => (p + 1) % n,
+            Some(p) => (p + n - 1) % n,
+            None if forward => i % n,
+            None => (i + n - 1) % n,
+        },
+    };
+    *memo = Some((list[idx], idx));
+    Some(list[idx])
 }
 
 /// Whether an action is allowed in a read-only session (replay or spectating).
@@ -275,6 +400,7 @@ impl App {
         let theme = Theme::get(settings.theme);
         let effective = caps.with_choice(settings.renderer);
         let history = History::new(settings.history_size.max(10));
+        let send_pct = initial_send_pct(&settings);
         let camera = Camera::world(&map);
         let renderer = MapRenderer::new(Arc::clone(&map));
         let now = Instant::now();
@@ -297,6 +423,7 @@ impl App {
             session: None,
             choose: None,
             prompt: Prompt::new(),
+            prompt_open: false,
             history,
             analysis: Analysis::default(),
             prompt_target: None,
@@ -306,12 +433,15 @@ impl App {
             help: None,
             speed_pct: 100,
             paused: false,
+            send_pct,
             acc_us: 0,
             last_update: now,
             anim_frame: 0,
             last_anim: now,
             anim_active: false,
-            tab_index: 0,
+            tab_cycle: None,
+            own_cycle: None,
+            last_action: None,
             focus_flash: None,
             dirty: true,
             quit: false,
@@ -404,6 +534,7 @@ impl App {
             },
             Screen::Playing => {
                 self.prompt_target.is_some()
+                    || (!self.prompt_open && self.selected_region().is_some())
                     || self.focus_active(now)
                     || self.log.any_flashing(now)
             }
@@ -596,6 +727,7 @@ impl App {
         self.help = None;
         self.panel = None;
         self.prompt.clear();
+        self.prompt_open = false;
         self.analysis = Analysis::default();
         self.prompt_target = None;
         self.submit_error = None;
@@ -643,12 +775,12 @@ impl App {
         self.note(&summary, Tone::Accent);
         if spectate {
             self.note(
-                "Bot-only match: you are watching. speed, pause, focus, info and quit still work.",
+                "Bot-only match: you are watching. Arrows pan, p pauses, [ ] change speed, i shows info, :q quits.",
                 Tone::Accent,
             );
         } else {
             self.note(
-                "Type commands at the prompt, e.g. `a <region> 30%`. `help` lists everything.",
+                "Arrows move the crosshair, Tab jumps to a target, a attacks it with the amount set by 1-0. : types a command, ? helps.",
                 Tone::Dim,
             );
         }
@@ -726,6 +858,7 @@ impl App {
         self.choose = None;
         self.log.clear();
         self.prompt.clear();
+        self.prompt_open = false;
         self.history.reset_navigation();
         self.analysis = Analysis::default();
         self.prompt_target = None;
@@ -734,8 +867,11 @@ impl App {
         self.help = None;
         self.speed_pct = 100;
         self.paused = false;
+        self.send_pct = initial_send_pct(&self.settings);
         self.acc_us = 0;
-        self.tab_index = 0;
+        self.tab_cycle = None;
+        self.own_cycle = None;
+        self.last_action = None;
         self.focus_flash = None;
         self.camera = Camera::world(&self.map);
         if let Some(r) = capital {
@@ -772,6 +908,7 @@ impl App {
         self.paused = false;
         self.acc_us = 0;
         self.prompt.clear();
+        self.prompt_open = false;
         self.analysis = Analysis::default();
         self.prompt_target = None;
         self.submit_error = None;
@@ -785,6 +922,8 @@ impl App {
         let preview = Game::new(Arc::clone(&self.map), self.balance.clone(), pcfg);
         self.camera = Camera::world(&self.map);
         self.prompt.clear();
+        self.prompt_open = false;
+        self.tab_cycle = None;
         self.choose = Some(ChooseState {
             config: cfg,
             preview,
@@ -792,6 +931,7 @@ impl App {
             error: None,
         });
         self.set_screen(Screen::ChooseStart);
+        self.choose_track();
     }
 
     // ------------------------------------------------------------------
@@ -825,6 +965,9 @@ impl App {
             }
         }
         self.dirty = true;
+        // While the crosshair shows (hotkey mode), the center may go past the
+        // band the view can center on, so the crosshair reaches every row.
+        self.camera.free_y = !self.prompt_open;
         match self.screen {
             Screen::Splash => self.after_splash(),
             Screen::Setup => self.key_setup(key),
@@ -944,6 +1087,59 @@ impl App {
     }
 
     fn key_choose(&mut self, key: KeyEvent) {
+        if self.prompt_open {
+            self.key_choose_prompt(key);
+        } else {
+            self.key_choose_hotkey(key);
+        }
+    }
+
+    /// The start picker in hotkey mode: move the crosshair onto a region and
+    /// press Enter to start there.
+    fn key_choose_hotkey(&mut self, key: KeyEvent) {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let alt = key.modifiers.contains(KeyModifiers::ALT);
+        let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+        match key.code {
+            KeyCode::Esc => {
+                self.go_setup(None);
+                return;
+            }
+            KeyCode::Enter => {
+                self.choose_pick();
+                return;
+            }
+            KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down => {
+                self.pan_key(key.code, ctrl || shift);
+            }
+            KeyCode::Tab => self.choose_cycle(!shift),
+            KeyCode::BackTab => self.choose_cycle(false),
+            KeyCode::Char(c) => {
+                // Ctrl or Alt combinations are not hotkeys, but Windows reports
+                // AltGr (needed for ':' on some layouts) as Ctrl+Alt.
+                if ctrl != alt {
+                    return;
+                }
+                match c {
+                    ':' => {
+                        self.prompt.clear();
+                        self.prompt_open = true;
+                        if let Some(ch) = self.choose.as_mut() {
+                            ch.error = None;
+                        }
+                        return;
+                    }
+                    '+' | '=' | '-' | '_' => self.zoom_key(c),
+                    _ => return,
+                }
+            }
+            _ => return,
+        }
+        self.choose_track();
+    }
+
+    /// The start picker's typed prompt (opened with `:`): type a region name.
+    fn key_choose_prompt(&mut self, key: KeyEvent) {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
         let shift = key.modifiers.contains(KeyModifiers::SHIFT);
@@ -951,7 +1147,8 @@ impl App {
         match key.code {
             KeyCode::Esc => {
                 if self.prompt.is_empty() {
-                    self.go_setup(None);
+                    self.prompt_open = false;
+                    self.choose_track();
                     return;
                 }
                 self.prompt.clear();
@@ -962,18 +1159,18 @@ impl App {
                 return;
             }
             KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down if ctrl || shift => {
-                self.pan_key(key.code);
+                self.pan_key(key.code, false);
             }
             KeyCode::Left => {
                 if self.prompt.is_empty() {
-                    self.pan_key(key.code);
+                    self.pan_key(key.code, false);
                 } else {
                     self.prompt.left();
                 }
             }
             KeyCode::Right => {
                 if self.prompt.is_empty() {
-                    self.pan_key(key.code);
+                    self.pan_key(key.code, false);
                 } else {
                     self.prompt.right();
                 }
@@ -1042,6 +1239,61 @@ impl App {
         }
     }
 
+    /// Hotkey mode on the start picker: the region under the crosshair is the
+    /// pick, and the preview shows you starting there.
+    fn choose_track(&mut self) {
+        let sel = self.selected_region();
+        let map = Arc::clone(&self.map);
+        let balance = self.balance.clone();
+        if let Some(c) = self.choose.as_mut() {
+            c.error = None;
+            if c.resolved == sel {
+                return;
+            }
+            c.resolved = sel;
+            if let Some(r) = sel {
+                let mut pcfg = c.config.clone();
+                pcfg.bots = 0;
+                pcfg.start = StartChoice::Region(r);
+                c.preview = Game::new(map, balance, pcfg);
+            }
+        }
+    }
+
+    /// Tab on the start picker: jump through all regions, most valuable first.
+    fn choose_cycle(&mut self, forward: bool) {
+        let map = Arc::clone(&self.map);
+        let mut list: Vec<RegionId> = map.regions.iter().map(|info| info.id).collect();
+        list.sort_by_key(|&r| (Reverse(map.region(r).value), r));
+        if let Some(r) = cycle_step(&list, &mut self.tab_cycle, forward) {
+            self.snap_to(r);
+        }
+    }
+
+    /// Enter on the start picker in hotkey mode: start in the region under the crosshair.
+    fn choose_pick(&mut self) {
+        self.choose_track();
+        let pick: Option<(MatchConfig, RegionId)> = match &self.choose {
+            Some(c) => c.resolved.map(|r| (c.config.clone(), r)),
+            None => None,
+        };
+        match pick {
+            Some((cfg, r)) => {
+                let mut cfg = cfg;
+                cfg.start = StartChoice::Region(r);
+                self.start_match(cfg);
+            }
+            None => {
+                if let Some(c) = self.choose.as_mut() {
+                    c.error = Some(
+                        "move the crosshair onto a region first (arrows or Tab), or press : to type one"
+                            .to_string(),
+                    );
+                }
+            }
+        }
+    }
+
     fn choose_confirm(&mut self) {
         let empty = self.prompt.text().trim().is_empty();
         let pick: Option<(MatchConfig, RegionId)> = match &self.choose {
@@ -1101,25 +1353,399 @@ impl App {
         }
     }
 
-    fn pan_key(&mut self, code: KeyCode) {
+    /// Pans the camera (and so the crosshair) one step, or four with `fast`.
+    fn pan_key(&mut self, code: KeyCode, fast: bool) {
+        let k = if fast { 4 } else { 1 };
+        let (sx, sy) = PAN_STEP;
         match code {
-            KeyCode::Left => self.camera.pan(-8, 0),
-            KeyCode::Right => self.camera.pan(8, 0),
-            KeyCode::Up => self.camera.pan(0, -3),
-            KeyCode::Down => self.camera.pan(0, 3),
+            KeyCode::Left => self.camera.pan(-sx * k, 0),
+            KeyCode::Right => self.camera.pan(sx * k, 0),
+            KeyCode::Up => self.camera.pan(0, -sy * k),
+            KeyCode::Down => self.camera.pan(0, sy * k),
             _ => {}
         }
     }
 
+    /// `+` or `=` zooms in, anything else (`-`, `_`) zooms out.
     fn zoom_key(&mut self, c: char) {
-        if c == '+' {
+        if c == '+' || c == '=' {
             self.camera.zoom_in();
         } else {
             self.camera.zoom_out();
         }
     }
 
+    /// PageUp / PageDown: scroll the help overlay when it is open, else the event log.
+    fn scroll_page(&mut self, up: bool) {
+        match self.help.as_mut() {
+            Some(h) => {
+                if up {
+                    h.scroll = h.scroll.saturating_sub(8);
+                } else {
+                    h.scroll = (h.scroll + 8).min(h.lines.len().saturating_sub(1));
+                }
+            }
+            None => {
+                if up {
+                    self.log.scroll_up(5);
+                } else {
+                    self.log.scroll_down(5);
+                }
+            }
+        }
+    }
+
     fn key_playing(&mut self, key: KeyEvent) {
+        if self.prompt_open {
+            self.key_prompt(key);
+        } else {
+            self.key_hotkey(key);
+        }
+    }
+
+    /// Opens prompt mode (the typed command line).
+    fn open_prompt(&mut self) {
+        self.prompt_open = true;
+        self.submit_error = None;
+        self.history.reset_navigation();
+    }
+
+    /// Leaves prompt mode for hotkey mode, dropping the line.
+    fn close_prompt(&mut self) {
+        self.prompt_open = false;
+        self.prompt.clear();
+        self.history.reset_navigation();
+        self.analysis = Analysis::default();
+        self.prompt_target = None;
+        self.submit_error = None;
+    }
+
+    /// Hotkey mode (the default while playing): single keys act at once, on
+    /// the region under the crosshair where they need one. Unknown keys do nothing.
+    fn key_hotkey(&mut self, key: KeyEvent) {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let alt = key.modifiers.contains(KeyModifiers::ALT);
+        let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+        if let Some(h) = self.help.as_mut() {
+            // The help overlay takes the keys that scroll or close it.
+            match key.code {
+                KeyCode::Up => {
+                    h.scroll = h.scroll.saturating_sub(1);
+                    return;
+                }
+                KeyCode::Down => {
+                    h.scroll = (h.scroll + 1).min(h.lines.len().saturating_sub(1));
+                    return;
+                }
+                KeyCode::Esc | KeyCode::Enter | KeyCode::Char('?') | KeyCode::Char('h') => {
+                    self.help = None;
+                    return;
+                }
+                KeyCode::PageUp | KeyCode::PageDown => {}
+                // Swallow everything else so a stray letter can't fire an
+                // action on the map hidden under the overlay.
+                _ => return,
+            }
+        }
+        if key.code == KeyCode::Esc {
+            if self.submit_error.is_some() {
+                self.submit_error = None;
+            } else {
+                self.panel = None;
+            }
+            return;
+        }
+        // Each key replaces the previous key's error.
+        self.submit_error = None;
+        match key.code {
+            KeyCode::Enter => self.open_prompt(),
+            KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down => {
+                self.pan_key(key.code, ctrl || shift);
+            }
+            KeyCode::Tab => self.cycle_targets(!shift),
+            KeyCode::BackTab => self.cycle_targets(false),
+            KeyCode::PageUp => self.scroll_page(true),
+            KeyCode::PageDown => self.scroll_page(false),
+            KeyCode::Char(c) => {
+                // Ctrl or Alt combinations are not hotkeys, but Windows reports
+                // AltGr (needed for `[`, `]` or `:` on some layouts) as Ctrl+Alt.
+                if ctrl == alt {
+                    self.hotkey_char(c);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn hotkey_char(&mut self, c: char) {
+        let amount = Amount::Percent(self.send_pct);
+        // Caps Lock shouldn't disable the hotkeys; `O` is the only uppercase binding.
+        let c = if c == 'O' { c } else { c.to_ascii_lowercase() };
+        match c {
+            ':' => self.open_prompt(),
+            '+' | '=' | '-' | '_' => self.zoom_key(c),
+            'o' => self.cycle_owned(true),
+            'O' => self.cycle_owned(false),
+            'c' => self.snap_capital(),
+            'a' => self.hotkey_on_selection("attack", |r| Command::Attack { target: r, amount }),
+            'f' => self.hotkey_on_selection("fortify", |r| Command::Fortify { region: r, amount }),
+            'r' => self.hotkey_on_selection("recall", |r| Command::Recall { region: r, amount }),
+            'w' => self.hotkey_smart(SmartTarget::Weakest, "@weakest"),
+            'e' => self.hotkey_smart(SmartTarget::Richest, "@richest"),
+            '0'..='9' => {
+                if let Some(d) = c.to_digit(10) {
+                    self.send_pct = if d == 0 { 100 } else { (d * 10) as u8 };
+                }
+            }
+            'i' => {
+                if let Some(r) = self.require_selection() {
+                    self.panel = Some(Panel::Region(r));
+                }
+            }
+            's' => self.perform(Action::Status, ""),
+            'l' => self.hotkey_diplomacy(true),
+            'u' => self.hotkey_diplomacy(false),
+            'y' => self.hotkey_accept_offer(),
+            'p' | ' ' => self.perform(Action::TogglePause, ""),
+            '[' => self.step_speed(false),
+            ']' => self.step_speed(true),
+            't' => self.perform(Action::Theme(None), ""),
+            '?' | 'h' => self.perform(Action::Help(None), ""),
+            '.' => self.repeat_last(),
+            _ => {}
+        }
+    }
+
+    /// The region under the map crosshair (the hotkey selection).
+    pub fn selected_region(&self) -> Option<RegionId> {
+        crosshair_region(&self.map, &self.camera)
+    }
+
+    /// The selection, or `None` with an error saying how to select a region.
+    fn require_selection(&mut self) -> Option<RegionId> {
+        let sel = self.selected_region();
+        if sel.is_none() {
+            self.submit_error = Some(
+                "no region under the crosshair: move it with the arrows or press Tab".to_string(),
+            );
+        }
+        sel
+    }
+
+    /// Whether the session only allows view actions (replay or spectating).
+    fn read_only(&self) -> bool {
+        match &self.session {
+            Some(s) => s.read_only(),
+            None => true,
+        }
+    }
+
+    /// Shows the read-only error for `verb` and returns true in a read-only session.
+    fn blocked(&mut self, verb: &str) -> bool {
+        if self.read_only() {
+            self.submit_error = Some(read_only_error(verb));
+            return true;
+        }
+        false
+    }
+
+    /// Centers the crosshair on region `r`'s label, keeping the zoom. If the
+    /// center is still kept off the label (the camera's band clamp, outside
+    /// hotkey mode), it zooms in until the label is under the crosshair.
+    fn snap_to(&mut self, r: RegionId) {
+        let (x, y) = match self.map.get_region(r) {
+            Some(info) => (f32::from(info.label.0) + 0.5, f32::from(info.label.1) + 0.5),
+            None => return,
+        };
+        self.camera.center_on(x, y);
+        while self.selected_region() != Some(r) && self.camera.zoom != ZoomLevel::Region {
+            self.camera.zoom_in();
+            self.camera.center_on(x, y);
+        }
+    }
+
+    /// Tab / Shift+Tab: the next or previous region you can attack, nearest
+    /// to your capital first.
+    fn cycle_targets(&mut self, forward: bool) {
+        let list: Vec<RegionId> = match session_game(&self.session) {
+            Some(g) => {
+                let mut list = g.attackable_regions(HUMAN);
+                if let Some(cap) = g.get_player(HUMAN).and_then(|p| p.capital) {
+                    let map = g.map();
+                    list.sort_by_key(|&r| (label_dist2(map, cap, r), r));
+                }
+                list
+            }
+            None => return,
+        };
+        match cycle_step(&list, &mut self.tab_cycle, forward) {
+            Some(r) => self.snap_to(r),
+            None => {
+                self.submit_error = Some("there is no region you can attack".to_string());
+            }
+        }
+    }
+
+    /// `o` / `O`: the next or previous region you own, most valuable first.
+    fn cycle_owned(&mut self, forward: bool) {
+        let list: Vec<RegionId> = match session_game(&self.session) {
+            Some(g) => {
+                let mut list = g.owned_regions(HUMAN);
+                let map = g.map();
+                list.sort_by_key(|&r| (Reverse(map.region(r).value), r));
+                list
+            }
+            None => return,
+        };
+        match cycle_step(&list, &mut self.own_cycle, forward) {
+            Some(r) => self.snap_to(r),
+            None => self.submit_error = Some("you own no regions".to_string()),
+        }
+    }
+
+    /// `c`: back to your capital.
+    fn snap_capital(&mut self) {
+        let capital = session_game(&self.session)
+            .and_then(|g| g.get_player(HUMAN))
+            .and_then(|p| p.capital);
+        match capital {
+            Some(r) => self.snap_to(r),
+            None => self.submit_error = Some("you have no capital".to_string()),
+        }
+    }
+
+    /// `[` / `]`: the next slower or faster step of [`SPEED_STEPS`].
+    fn step_speed(&mut self, faster: bool) {
+        let cur = self.speed_pct;
+        let next = if faster {
+            SPEED_STEPS.iter().copied().find(|&s| s > cur).unwrap_or(SPEED_MAX_PCT)
+        } else {
+            SPEED_STEPS.iter().rev().copied().find(|&s| s < cur).unwrap_or(SPEED_MIN_PCT)
+        };
+        self.perform(Action::Speed(next), "");
+    }
+
+    /// Runs the game command `build` makes for the selected region.
+    fn hotkey_on_selection(&mut self, verb: &str, build: impl FnOnce(RegionId) -> Command) {
+        if self.blocked(verb) {
+            return;
+        }
+        if let Some(r) = self.require_selection() {
+            self.hotkey_command(build(r), None);
+        }
+    }
+
+    /// `w` / `e`: attack a smart target with the current amount and jump there.
+    fn hotkey_smart(&mut self, target: SmartTarget, label: &str) {
+        if self.blocked("attack") {
+            return;
+        }
+        let resolved = match session_game(&self.session) {
+            Some(g) => resolve_target(g, HUMAN, &target),
+            None => return,
+        };
+        match resolved {
+            Ok(r) => {
+                self.snap_to(r);
+                let amount = Amount::Percent(self.send_pct);
+                self.hotkey_command(Command::Attack { target: r, amount }, Some(label));
+            }
+            Err(e) => self.submit_error = Some(format!("{}: {}", label, e)),
+        }
+    }
+
+    /// `l` / `u`: ally with, or break with, the owner of the selected region.
+    fn hotkey_diplomacy(&mut self, ally: bool) {
+        if self.blocked(if ally { "ally" } else { "unally" }) {
+            return;
+        }
+        let r = match self.require_selection() {
+            Some(r) => r,
+            None => return,
+        };
+        let owner = match session_game(&self.session) {
+            Some(g) => g.region_state(r).owner,
+            None => return,
+        };
+        let with = match owner {
+            Some(p) => p,
+            None => {
+                let name = self.map.region(r).name.clone();
+                self.submit_error = Some(format!(
+                    "{} is neutral: select a region another player owns",
+                    name
+                ));
+                return;
+            }
+        };
+        let cmd = if ally {
+            Command::ProposeAlliance { with }
+        } else {
+            Command::BreakAlliance { with }
+        };
+        self.hotkey_command(cmd, None);
+    }
+
+    /// `y`: accept the newest alliance proposal made to you.
+    fn hotkey_accept_offer(&mut self) {
+        if self.blocked("ally") {
+            return;
+        }
+        let from = match session_game(&self.session) {
+            Some(g) => g
+                .proposals()
+                .iter()
+                .filter(|p| p.to == HUMAN)
+                .max_by_key(|p| p.expires)
+                .map(|p| p.from),
+            None => return,
+        };
+        match from {
+            Some(p) => self.hotkey_command(Command::ProposeAlliance { with: p }, None),
+            None => self.submit_error = Some("no alliance offer to accept".to_string()),
+        }
+    }
+
+    /// Runs a game command built by a hotkey through the same path as a typed
+    /// one: `Game::preview` validates it (a rejection shows its reason and
+    /// queues nothing), then it is queued and flashed in the event log.
+    fn hotkey_command(&mut self, cmd: Command, smart: Option<&str>) {
+        if self.blocked(cmd.verb()) {
+            return;
+        }
+        let parsed = match session_game(&self.session) {
+            Some(game) => {
+                let ctx = make_ctx(game, &self.settings, &self.history);
+                describe_command(cmd, smart, &ctx)
+            }
+            None => return,
+        };
+        match parsed {
+            Ok(pc) => {
+                self.submit_error = None;
+                self.last_action = Some(Repeat::Command(cmd));
+                self.perform(pc.action, &pc.hint);
+            }
+            Err(e) => self.submit_error = Some(e),
+        }
+    }
+
+    /// `.`: repeats the last hotkey game command (same target) or command line.
+    fn repeat_last(&mut self) {
+        match self.last_action.clone() {
+            Some(Repeat::Command(cmd)) => self.hotkey_command(cmd, None),
+            Some(Repeat::Line(line)) => {
+                if let Some(ran) = self.run_line(&line) {
+                    self.last_action = Some(Repeat::Line(ran));
+                }
+            }
+            None => self.submit_error = Some("nothing to repeat yet".to_string()),
+        }
+    }
+
+    /// Prompt mode: the typed command line. Keys edit the line; Enter runs it
+    /// and returns to hotkey mode; Esc clears the line, then returns.
+    fn key_prompt(&mut self, key: KeyEvent) {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
         let shift = key.modifiers.contains(KeyModifiers::SHIFT);
@@ -1131,10 +1757,8 @@ impl App {
                 } else if !self.prompt.is_empty() {
                     self.prompt.clear();
                     edited = true;
-                } else if self.submit_error.is_some() {
-                    self.submit_error = None;
                 } else {
-                    self.panel = None;
+                    self.close_prompt();
                 }
                 self.history.reset_navigation();
             }
@@ -1143,21 +1767,14 @@ impl App {
                 return;
             }
             KeyCode::Tab => {
-                if self.prompt.is_empty() {
-                    self.cycle_owned(true);
-                } else if !self.analysis.ghost.is_empty() && self.prompt.at_end() {
+                if !self.analysis.ghost.is_empty() && self.prompt.at_end() {
                     let line = self.analysis.accept_ghost(self.prompt.text());
                     self.prompt.set(line);
                     edited = true;
                 }
             }
-            KeyCode::BackTab => {
-                if self.prompt.is_empty() {
-                    self.cycle_owned(false);
-                }
-            }
             KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down if ctrl || shift => {
-                self.pan_key(key.code);
+                self.pan_key(key.code, false);
             }
             KeyCode::Up => {
                 if let Some(line) = self.history.up(self.prompt.text()) {
@@ -1173,14 +1790,14 @@ impl App {
             }
             KeyCode::Left => {
                 if self.prompt.is_empty() {
-                    self.pan_key(key.code);
+                    self.pan_key(key.code, false);
                 } else {
                     self.prompt.left();
                 }
             }
             KeyCode::Right => {
                 if self.prompt.is_empty() {
-                    self.pan_key(key.code);
+                    self.pan_key(key.code, false);
                 } else if self.prompt.at_end() && !self.analysis.ghost.is_empty() {
                     let line = self.analysis.accept_ghost(self.prompt.text());
                     self.prompt.set(line);
@@ -1193,17 +1810,8 @@ impl App {
             KeyCode::End => self.prompt.end(),
             KeyCode::Backspace => edited = self.prompt.backspace(),
             KeyCode::Delete => edited = self.prompt.delete(),
-            KeyCode::PageUp => match self.help.as_mut() {
-                Some(h) => h.scroll = h.scroll.saturating_sub(8),
-                None => self.log.scroll_up(5),
-            },
-            KeyCode::PageDown => match self.help.as_mut() {
-                Some(h) => {
-                    let max = h.lines.len().saturating_sub(1);
-                    h.scroll = (h.scroll + 8).min(max);
-                }
-                None => self.log.scroll_down(5),
-            },
+            KeyCode::PageUp => self.scroll_page(true),
+            KeyCode::PageDown => self.scroll_page(false),
             KeyCode::Char(c) => {
                 // Windows reports AltGr (needed for '@' on many layouts) as Ctrl+Alt.
                 let altgr = ctrl && alt;
@@ -1265,36 +1873,31 @@ impl App {
         self.dirty = true;
     }
 
-    fn cycle_owned(&mut self, forward: bool) {
-        let owned: Vec<RegionId> = match session_game(&self.session) {
-            Some(g) => g.owned_regions(HUMAN),
-            None => Vec::new(),
-        };
-        if owned.is_empty() {
-            return;
-        }
-        let n = owned.len();
-        if forward {
-            self.tab_index = (self.tab_index + 1) % n;
-        } else {
-            self.tab_index = (self.tab_index + n - 1) % n;
-        }
-        let r = owned[self.tab_index % n];
-        self.camera.focus_region(&self.map, r);
-        self.focus_flash = Some((r, Instant::now() + FOCUS_FLASH));
-    }
-
+    /// Enter in prompt mode: runs the line and returns to hotkey mode; a
+    /// rejected line stays on the prompt with its reason. An empty line just
+    /// returns to hotkey mode.
     fn submit_line(&mut self) {
         let line = self.prompt.text().to_string();
         if line.trim().is_empty() {
+            self.close_prompt();
             return;
         }
+        if let Some(ran) = self.run_line(&line) {
+            self.last_action = Some(Repeat::Line(ran));
+            self.close_prompt();
+        }
+    }
+
+    /// Parses, checks and performs a whole command line exactly as typed at
+    /// the prompt. Returns the line `.` should repeat (with `!!` expanded), or
+    /// `None` when the line was rejected (the reason is in `submit_error`).
+    fn run_line(&mut self, line: &str) -> Option<String> {
         let result: SubmitResult = match session_game(&self.session) {
             Some(game) => {
                 let ctx = make_ctx(game, &self.settings, &self.history);
-                command::submit(&line, &ctx)
+                command::submit(line, &ctx)
             }
-            None => return,
+            None => return None,
         };
         let SubmitResult {
             actions,
@@ -1305,32 +1908,28 @@ impl App {
         if !errors.is_empty() {
             self.submit_error = Some(errors.join(" | "));
             self.dirty = true;
-            return;
+            return None;
         }
-        let read_only = match &self.session {
-            Some(s) => s.read_only(),
-            None => true,
-        };
-        if read_only {
+        if self.read_only() {
             if let Some(bad) = actions.iter().find(|a| !allowed_read_only(a)) {
                 let what = match bad {
                     Action::Game(cmd) => cmd.verb().to_string(),
                     Action::Save(_) => "save".to_string(),
                     _ => "that command".to_string(),
                 };
-                self.submit_error = Some(format!(
-                    "read-only: {} is not available (speed, pause, focus, info, status, help, theme, quit)",
-                    what
-                ));
-                return;
+                self.submit_error = Some(read_only_error(&what));
+                return None;
             }
         }
+        let ran = match &history_line {
+            Some(h) => h.clone(),
+            None => line.to_string(),
+        };
         if let Some(h) = history_line {
             self.history.push(&h);
         } else {
             self.history.reset_navigation();
         }
-        self.prompt.clear();
         self.submit_error = None;
         for (i, action) in actions.into_iter().enumerate() {
             let echo = match echoes.get(i) {
@@ -1339,7 +1938,7 @@ impl App {
             };
             self.perform(action, &echo);
         }
-        self.refresh_analysis();
+        Some(ran)
     }
 
     fn echo(&mut self, echo: &str, flash: bool) {
@@ -1389,7 +1988,7 @@ impl App {
                 self.paused = !self.paused;
                 self.acc_us = 0;
                 if self.paused {
-                    self.note("Paused. Type `p` again to resume.", Tone::Warn);
+                    self.note("Paused. Press p again to resume.", Tone::Warn);
                 } else {
                     self.note("Resumed.", Tone::Accent);
                 }

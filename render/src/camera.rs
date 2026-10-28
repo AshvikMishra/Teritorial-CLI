@@ -92,6 +92,10 @@ pub struct Camera {
     /// `(0, 0)` means unknown, and then `cy` is only clamped to the raster.
     /// It is a `Cell` so the renderer can record it through `&Camera`.
     view: Cell<(u16, u16)>,
+    /// Let `cy` reach the top and bottom raster rows instead of only the band
+    /// the view can center on. The UI sets it while the center crosshair is
+    /// shown: the view then stops at the edge and the crosshair moves on.
+    pub free_y: bool,
 }
 
 impl Camera {
@@ -106,6 +110,7 @@ impl Camera {
             world_w: w,
             world_h: h,
             view: Cell::new((0, 0)),
+            free_y: false,
         }
     }
 
@@ -145,7 +150,7 @@ impl Camera {
         // Snap to the reachable band first, so a center left outside it (for
         // example by a camera reset before the first draw) does not eat the pan.
         self.normalize();
-        let s = self.pan_scale();
+        let s = self.pixel_scale();
         self.cx += dx as f32 * s;
         self.cy += dy as f32 * s * 2.0;
         self.normalize();
@@ -179,8 +184,10 @@ impl Camera {
         self.normalize();
     }
 
-    /// Raster cells per pixel used for panning.
-    fn pan_scale(&self) -> f32 {
+    /// Raster cells per screen pixel at the current zoom, for the last view
+    /// size drawn (a nominal width before the first draw). Panning uses it,
+    /// and the UI scales its crosshair snap radius with it.
+    pub fn pixel_scale(&self) -> f32 {
         let (cols, _) = self.view.get();
         self.zoom.scale(if cols == 0 { WORLD_PAN_VIEW_W as u16 } else { cols }, self.world_w)
     }
@@ -192,7 +199,8 @@ impl Camera {
     /// so every vertical pan moves the view. The view height matches the
     /// renderer's: `rows * 2 * scale` raster rows. Otherwise (no view size yet,
     /// or the whole height fits and the renderer centers the map) `cy` is only
-    /// clamped to `0..=world_h`, which keeps it for a later zoom in.
+    /// clamped to `0..=world_h`, which keeps it for a later zoom in. With
+    /// `free_y`, `cy` goes up to the middle of the last raster row instead.
     fn normalize(&mut self) {
         let w = self.world_w.max(1.0);
         let h = self.world_h.max(1.0);
@@ -209,7 +217,9 @@ impl Camera {
         } else {
             0.0
         };
-        self.cy = if vh > 0.0 && vh < h {
+        self.cy = if self.free_y {
+            self.cy.clamp(0.0, h - 0.5)
+        } else if vh > 0.0 && vh < h {
             self.cy.clamp(vh / 2.0, h - vh / 2.0)
         } else {
             self.cy.clamp(0.0, h)

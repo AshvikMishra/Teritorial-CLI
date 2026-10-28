@@ -377,11 +377,13 @@ impl Theme {
 }
 
 pub enum ZoomLevel { World, Overview, Wide, Continent, Area, Local, Region }
-pub struct Camera { pub cx: f32, pub cy: f32, pub zoom: ZoomLevel }  // center in raster coords
+pub struct Camera { pub cx: f32, pub cy: f32, pub zoom: ZoomLevel, pub free_y: bool }  // center in raster coords; free_y: cy may leave the centerable band
 impl Camera {
     pub fn world(map: &WorldMap) -> Camera;
     pub fn focus_region(&mut self, map: &WorldMap, r: RegionId);   // centers on label, zooms in to at least Continent
+    pub fn center_on(&mut self, x: f32, y: f32);                   // raster point, zoom unchanged
     pub fn pan(&mut self, dx: i32, dy: i32);                       // in screen cells, scaled by zoom
+    pub fn pixel_scale(&self) -> f32;                              // raster cells per screen pixel for the last view drawn
     pub fn zoom_in(&mut self); pub fn zoom_out(&mut self);
 }
 
@@ -393,6 +395,7 @@ impl MapRenderer {
 pub struct MapRenderCtx<'a> {
     pub game: &'a Game, pub camera: &'a Camera, pub theme: &'a Theme, pub caps: Capabilities,
     pub viewer: PlayerId, pub highlight: Option<RegionId>, pub anim_frame: u32,
+    pub crosshair: bool,   // draw the hotkey crosshair where the camera center lands
 }
 pub mod art {
     pub const SPLASH_FRAMES: &[&str];   // a few frames of the title
@@ -412,6 +415,9 @@ Rendering rules:
 - Labels (`code` plus garrison) are drawn at region labels at Continent zoom or closer, and at World zoom for large regions if they fit.
 - Marches are drawn as an arrow glyph interpolated between source and target labels (`→←↑↓↗↘↙↖` in Unicode mode, `> < ^ v` in ASCII mode).
 - The highlight region pulses with `anim_frame`.
+- With `crosshair`, a `✛` (ASCII: reversed `+`) in the highlight color is drawn on the
+  cell where `(cx, cy)` actually lands. That is the view center except when the
+  whole map height fits and the renderer centers the map vertically.
 - Zoom scales are raster cells per screen pixel: World = fit the whole width, Continent = 2.0, Region = 0.75 (about 1 raster cell per pixel or finer).
 
 ## 5. UI crate (`territorial_ui`)
@@ -425,16 +431,51 @@ Rendering rules:
 - `Settings` (serde, `#[serde(default)]`): `theme: ThemeKind`, `renderer: RendererChoice`,
   `default_attack_pct_neutral: u8`, `default_attack_pct_enemy: u8`, `aliases: BTreeMap<String, String>`,
   `history_size: usize`, `show_hints: bool`, `last_config: Option<MatchConfig>`.
-- Screens: Splash, then Setup, then optional ChooseStart (map plus the prompt "type a region"), then Countdown (3, 2, 1, GO), then Playing, then GameOver (victory or defeat plus stats, `enter` for a new match, `q` to quit). Replay mode goes Playing (read-only), then GameOver.
+- Screens: Splash, then Setup, then optional ChooseStart (map with the crosshair: arrows/zoom/Tab move it, Enter starts in the region under it, `:` opens a prompt to type a region, Esc goes back), then Countdown (3, 2, 1, GO), then Playing, then GameOver (victory or defeat plus stats, `enter` for a new match, `q` to quit). Replay mode goes Playing (read-only), then GameOver.
 - The input thread reads crossterm events into an `mpsc` channel. The main loop runs the sim at 10 Hz × speed, drains input, and redraws at most 30 to 60 FPS, and only when dirty or animating.
 - The command system (module `command`): tokenizer, `;` chaining, `!!`, user aliases with `$1..$9`/`$*`, verb aliases, fuzzy region resolution (exact code, then exact name, then prefix, then subsequence, then edit distance <= 2), smart targets, ghost-text completion (Tab accepts), a live hint strip from `Game::preview`, history (Up and Down), and Esc to clear.
   UI-only verbs: `info|i`, `focus|w`, `status|s`, `speed|sp`, `pause|p`, `alias`, `unalias`, `help|h`, `save|sv`, `quit|q`, `theme`.
   Game verbs: `attack|a`, `fortify|f`, `recall|r`, `ally|al`, `unally|ua`.
-- View keys:
-  - Shift or Ctrl plus arrows pan.
-  - `+` and `-` zoom **when the prompt is empty**. Otherwise they're typed characters, because region codes contain `-`.
-  - Tab accepts ghost text. When the prompt is empty, Tab cycles the camera through your regions.
-  - Up and Down browse history. Left, Right, Home, End, Backspace and Delete edit the line.
+- Input on the Playing screen has two modes. The bottom row always shows which:
+  a dim key cheat strip in hotkey mode, the `> ` prompt in prompt mode.
+- **Hotkey mode** (the default). The selection is the region under the camera
+  center (the crosshair): `Raster::region_at(cx, cy)`, or over the ocean the
+  region whose label is nearest within 6 screen pixels (at least 6 raster
+  cells). It pulses like any highlight, and the hint strip previews it (name,
+  code, owner, garrison, value, and what `a` would do via `Game::preview`).
+  Keys act at once, without confirmation:
+  - Arrows pan (Shift or Ctrl: 4x). `+`/`=` zoom in, `-`/`_` zoom out.
+  - Tab / Shift+Tab snap the center to the next / previous attackable region
+    (`Game::attackable_regions`, ordered by label distance from your capital,
+    ties by id). `o` / `O` snap through your regions (value desc, then id),
+    `c` to your capital. Cycles remember their position. A snap keeps the zoom.
+  - In hotkey mode the UI sets `Camera::free_y`, so the center can go past the
+    band the view can center on: at the top and bottom of the map the view
+    stops and the crosshair moves off center, and every row stays reachable.
+  - `a` attack, `f` fortify, `r` recall the selection with `Amount::Percent(send)`.
+    `w` / `e` attack `@weakest` / `@richest` (`targets::resolve`) and snap there.
+    `1`..`9` set the sticky amount to 10%..90%, `0` to 100%; it starts at
+    `default_attack_pct_enemy` rounded to 10 and shows in the status bar.
+  - `l` / `u` ally / unally the selection's owner; `y` accepts the newest
+    proposal made to you.
+  - `i` info panel, `s` status, `p` or Space pause, `[` / `]` step the speed
+    (0.25x, 0.5x, 1x, 2x, 4x, 8x), `t` cycles the theme (persisted), `?` or `h`
+    help, `.` repeats the last hotkey command (same target) or the last
+    submitted line, PageUp/PageDown scroll the log (or help), Esc closes help
+    and panels or clears the error. Unknown keys do nothing.
+  - Hotkey game commands use the typed path: `parser::describe_command` validates
+    with `Game::preview` and builds the same hint; a rejection shows its reason
+    and queues nothing; success calls `Game::queue(HUMAN, cmd)` and flashes the
+    hint in the event log.
+  - Read-only sessions (replay, spectating) refuse `a f r w e l u y` with the
+    read-only error; everything else works.
+- **Prompt mode** (`:` or Enter). The typed command line, unchanged:
+  - Enter submits; success returns to hotkey mode, a rejected line stays with its reason.
+  - Esc clears a non-empty line, and on an empty line returns to hotkey mode.
+  - Tab accepts ghost text. Up and Down browse history. Left, Right, Home, End,
+    Backspace and Delete edit the line.
+  - Shift or Ctrl plus arrows pan. `+` and `-` zoom only when the line is empty,
+    because region codes contain `-`.
   - PageUp and PageDown scroll the event log.
 
 ## 6. CLI crate (`territorial`)

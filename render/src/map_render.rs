@@ -47,6 +47,9 @@ pub struct MapRenderCtx<'a> {
     pub highlight: Option<RegionId>,
     /// Animation frame counter; the highlight pulse cycles every 16 frames.
     pub anim_frame: u32,
+    /// Draw a crosshair where the camera center lands on screen (the hotkey
+    /// selection point).
+    pub crosshair: bool,
 }
 
 /// What the cached grid depends on.
@@ -213,6 +216,9 @@ impl MapRenderer {
         draw_march_trails(grid, map, ctx, area, buf);
         draw_labels(grid, map, &pal, ctx, area, buf);
         draw_march_arrows(grid, map, ctx, area, buf);
+        if ctx.crosshair {
+            draw_crosshair(grid, ctx, area, buf);
+        }
     }
 }
 
@@ -650,6 +656,31 @@ fn draw_march_arrows(grid: &Grid, map: &WorldMap, ctx: &MapRenderCtx<'_>, area: 
                 cell.set_bg(bg);
                 cell.modifier = Modifier::BOLD;
             }
+        }
+    }
+}
+
+/// The crosshair at the camera center. It is drawn where `(cx, cy)` actually
+/// lands, which is not the middle of the view when the whole map height fits
+/// and the renderer centers the map instead.
+fn draw_crosshair(grid: &Grid, ctx: &MapRenderCtx<'_>, area: Rect, buf: &mut Buffer) {
+    let (x, y) = match cell_of(grid, area, ctx.camera.cx, ctx.camera.cy) {
+        Some(p) => p,
+        None => return,
+    };
+    let fg = quantize(ctx.theme.highlight(), ctx.caps.color);
+    if let Some(cell) = buf.cell_mut((x, y)) {
+        if ctx.caps.glyphs == GlyphMode::Unicode {
+            cell.set_symbol("\u{271B}"); // ✛
+            cell.set_fg(fg);
+            cell.set_bg(quantize(ctx.theme.panel_bg(), ctx.caps.color));
+            cell.modifier = Modifier::BOLD;
+        } else {
+            // Reversed, so it stands apart from the `+` border glyphs.
+            cell.set_char('+');
+            cell.set_fg(fg);
+            cell.set_bg(Color::Reset);
+            cell.modifier = Modifier::BOLD | Modifier::REVERSED;
         }
     }
 }
